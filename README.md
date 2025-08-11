@@ -1,21 +1,6 @@
 # Map Dashboard
 
 A comprehensive geospatial analytics dashboard for visualizing and analyzing food delivery vendor data, customer orders, and market coverage across multiple Iranian cities. Built with Flask, Leaflet.js, and real-time Metabase integration.
-
-## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [Project Structure](#project-structure)
-- [Architecture](#architecture)
-- [Data Flow](#data-flow)
-- [API Documentation](#api-documentation)
-- [Component Details](#component-details)
-- [Installation & Setup](#installation--setup)
-- [Usage Guide](#usage-guide)
-- [Docker Deployment](#docker-deployment)
-- [Configuration](#configuration)
-- [Performance & Troubleshooting](#performance--troubleshooting)
-
 ## Overview
 
 The Tapsi Food Map Dashboard provides real-time geospatial analytics for food delivery operations across Tehran, Mashhad, and Shiraz. It integrates with Metabase to fetch live operational data and provides interactive visualizations for business intelligence and operational optimization.

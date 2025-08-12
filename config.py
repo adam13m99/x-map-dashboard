@@ -3,7 +3,7 @@ import os
 # Metabase connection details
 METABASE_URL = "https://metabase.ofood.cloud"
 METABASE_USERNAME = "a.mehmandoost@OFOOD.CLOUD"
-METABASE_PASSWORD = "Fff322666@"
+METABASE_PASSWORD = "METABASE_PASSWORD"
 
 # Metabase question IDs
 ORDER_DATA_QUESTION_ID = 5822

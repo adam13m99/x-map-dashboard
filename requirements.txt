@@ -17,5 +17,4 @@ python-dotenv==1.0.0  # Environment variables support
 
 # Spatial indexing (optional but recommended for better performance)
 rtree==1.0.1      # Requires GEOS library
-pygeos==0.14.0    # Alternative spatial operations (optional)
  

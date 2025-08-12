@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgeos-dev \
     libproj-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -22,6 +23,11 @@ COPY . .
 
 # Ensure public directory is accessible
 RUN chmod -R 755 public/
+
+# Create non-root user for security
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+RUN chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 5001
 

@@ -1,20 +1,33 @@
-# Core dependencies
-Flask==2.3.3
-flask-cors==4.0.0
-pandas>=2.2
-numpy>=1.26
-scipy==1.11.4
-geopandas==0.13.2
-shapely==2.0.1
+# ===== CORE WEB FRAMEWORK =====
+Flask>=2.3.3           
+flask-cors==4.0.0      
 
-# Production servers
-gunicorn==21.2.0  # For Linux/Unix
-waitress==2.1.2   # For Windows
+# ===== DATA PROCESSING =====
+pandas==2.3.1       
+numpy==2.3.2           
+scipy==1.16.1       
 
-# Optional performance improvements
-ujson==5.8.0      # Faster JSON parsing
-python-dotenv==1.0.0  # Environment variables support
+# ===== GEOSPATIAL STACK =====
+# All packages confirmed working with full functionality
+geopandas==1.1.1      
+shapely==2.1.1        
+pyproj==3.7.2         
+fiona==1.10.1          
+pyogrio==0.11.1       
 
-# Spatial indexing (optional but recommended for better performance)
-rtree==1.0.1      # Requires GEOS library
- 
+# ===== HTTP & UTILITIES =====
+requests==2.32.4       
+ujson==5.10.0         
+python-dotenv         
+
+# ===== SPATIAL INDEXING =====
+rtree==1.4.1          
+
+# ===== PRODUCTION SERVERS =====
+gunicorn==23.0.0      
+waitress==2.1.2             
+
+# ===== BUILD SUPPORT =====
+wheel                
+Cython        
+psutil     

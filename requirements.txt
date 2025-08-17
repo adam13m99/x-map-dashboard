@@ -1,33 +1,36 @@
 # ===== CORE WEB FRAMEWORK =====
-Flask>=2.3.3           
-flask-cors==4.0.0      
+Flask>=2.3.3
+flask-cors==4.0.0
 
 # ===== DATA PROCESSING =====
-pandas==2.3.1       
-numpy==2.3.2           
-scipy==1.16.1       
+# Using versions available in company PyPI repository
+pandas==2.3.1          
+numpy==2.3.1      
+scipy>=1.13.0,<1.17.0  
 
 # ===== GEOSPATIAL STACK =====
-# All packages confirmed working with full functionality
-geopandas==1.1.1      
-shapely==2.1.1        
-pyproj==3.7.2         
-fiona==1.10.1          
-pyogrio==0.11.1       
+# Using flexible ranges to work with private repository
+geopandas>=1.0.0,<1.2.0      
+shapely>=2.0.0,<2.2.0       
+pyproj>=3.6.0,<3.8.0       
+fiona>=1.8.0,<1.11.0         
+pyogrio>=0.9.0        
 
 # ===== HTTP & UTILITIES =====
-requests==2.32.4       
-ujson==5.10.0         
-python-dotenv         
+requests>=2.31.0             
+ujson>=5.8.0               
+python-dotenv             
 
 # ===== SPATIAL INDEXING =====
-rtree==1.4.1          
+rtree>=1.0.0            
 
 # ===== PRODUCTION SERVERS =====
-gunicorn==23.0.0      
-waitress==2.1.2             
+gunicorn>=22.0.0            
+waitress>=2.1.0   
 
 # ===== BUILD SUPPORT =====
-wheel                
-Cython        
-psutil     
+wheel                      
+Cython                      
+
+# ===== SYSTEM MONITORING =====
+psutil                      

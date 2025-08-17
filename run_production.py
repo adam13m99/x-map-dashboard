@@ -62,33 +62,42 @@ def get_system_info():
             'architecture': '64bit'
         }
 
-def calculate_optimal_workers(system_info):
-    """Calculate optimal worker count based on system resources"""
+def calculate_optimal_workers(system_info, force_single=True):
+    """
+    Calculate optimal worker count based on system resources.
+    MODIFIED: Now forces single worker for debugging SIGKILL issues.
+    """
+    if force_single:
+        print("🔧 Forcing single worker for debugging SIGKILL issues")
+        return 1
+    
+    # Original logic kept for reference but not used when force_single=True
     cpu_count = system_info['cpu_count']
     memory_gb = system_info['available_memory_gb']
     
-    # Memory-based worker calculation (each worker needs ~200-300MB)
-    memory_based_workers = int(memory_gb / 0.3)  # Conservative estimate
+    # FIXED: More conservative memory calculation for large datasets
+    # Each worker needs ~2-4GB for this application due to large datasets
+    memory_based_workers = max(1, int(memory_gb / 4.0))  # 4GB per worker
     
-    # CPU-based worker calculation with caps for different system sizes
+    # CPU-based worker calculation with lower limits for memory-intensive apps
     if cpu_count >= 32:
-        # High-CPU systems: limit to prevent memory exhaustion
-        cpu_based_workers = min(MAX_WORKERS, max(8, cpu_count // 3))
+        # High-CPU systems: much more conservative due to memory constraints
+        cpu_based_workers = min(4, max(2, cpu_count // 8))  # Reduced from //3
     elif cpu_count >= 16:
         # Medium-high CPU systems
-        cpu_based_workers = min(MAX_WORKERS, max(6, cpu_count // 2))
+        cpu_based_workers = min(3, max(2, cpu_count // 6))  # Reduced from //2
     elif cpu_count >= 8:
         # Medium CPU systems
-        cpu_based_workers = min(MAX_WORKERS, cpu_count + 2)
+        cpu_based_workers = min(3, max(2, cpu_count // 4))  # Reduced significantly
     else:
-        # Low CPU systems: standard formula
-        cpu_based_workers = min(MAX_WORKERS, (cpu_count * 2) + 1)
+        # Low CPU systems: very conservative
+        cpu_based_workers = min(2, max(1, cpu_count))
     
-    # Use the most conservative estimate
-    optimal_workers = min(memory_based_workers, cpu_based_workers, MAX_WORKERS)
+    # Use the most conservative estimate with lower cap
+    optimal_workers = min(memory_based_workers, cpu_based_workers, 4)  # Max 4 workers
     
-    # Ensure minimum of 2 workers
-    return max(2, optimal_workers)
+    # Ensure minimum of 1 worker
+    return max(1, optimal_workers)
 
 def check_memory_requirements():
     """Check if system has enough memory for the application"""
@@ -139,22 +148,25 @@ def pre_load_data():
             return False
 
 def run_waitress_server(host='0.0.0.0', port=5001):
-    """Run Waitress server for Windows"""
+    """Run Waitress server for Windows with increased timeouts"""
     try:
         from waitress import serve
-        print("🏃 Starting Waitress server (Windows)...")
+        print("🏃 Starting Waitress server (Windows) with extended timeouts...")
         
-        # Waitress configuration optimized for the application
+        # Waitress configuration optimized for the application with longer timeouts
         serve(
             app,
             host=host,
             port=port,
-            threads=8,
-            connection_limit=1000,
-            cleanup_interval=30,
-            channel_timeout=120,
+            threads=4,  # Reduced threads for single worker stability
+            connection_limit=500,  # Reduced connections
+            cleanup_interval=60,  # Increased cleanup interval
+            channel_timeout=300,  # Increased from 120 to 300 seconds
             log_socket_errors=True,
-            ident='Map-Dashboard'
+            ident='Map-Dashboard-Debug',
+            # Additional timeout settings
+            send_bytes=18000,  # Increased send buffer
+            asyncore_use_poll=True,  # Better for many connections
         )
     except ImportError:
         print("❌ Waitress not installed. Install with: pip install waitress")
@@ -166,11 +178,11 @@ def run_waitress_server(host='0.0.0.0', port=5001):
     return True
 
 def run_gunicorn_server(workers, host='0.0.0.0', port=5001):
-    """Run Gunicorn server for Linux/Unix"""
+    """Run Gunicorn server for Linux/Unix with debugging optimizations"""
     try:
         import gunicorn.app.base
         
-        class OptimizedGunicornApp(gunicorn.app.base.BaseApplication):
+        class DebugOptimizedGunicornApp(gunicorn.app.base.BaseApplication):
             def __init__(self, app, options=None):
                 self.options = options or {}
                 self.application = app
@@ -184,44 +196,61 @@ def run_gunicorn_server(workers, host='0.0.0.0', port=5001):
             def load(self):
                 return self.application
         
-        # Optimized Gunicorn configuration
+        # Debugging-optimized Gunicorn configuration
         options = {
             'bind': f'{host}:{port}',
             'workers': workers,
-            'worker_class': 'gthread',  # Better for I/O bound applications
-            'threads': 2,
-            'timeout': REQUEST_TIMEOUT,
-            'keepalive': 2,
-            'max_requests': 1000,  # Restart workers periodically
-            'max_requests_jitter': 100,
-            'worker_connections': 1000,
-            'preload_app': True,  # Load app before forking
+            'worker_class': 'sync',  # Stick with sync for debugging
+            'threads': 1,  # Single thread per worker for cleaner debugging
+            
+            # EXTENDED TIMEOUTS - Key fix for SIGKILL issues
+            'timeout': 300,  # Increased from 120 to 300 seconds (5 minutes)
+            'graceful_timeout': 60,  # Time to wait for graceful shutdown
+            'keepalive': 5,  # Increased keepalive
+            
+            # CONSERVATIVE SETTINGS for debugging
+            'max_requests': 100,  # Low number to force worker recycling
+            'max_requests_jitter': 20,  # Small jitter
+            'worker_connections': 100,  # Very conservative
+            'preload_app': False,  # Disable preload for easier debugging
+            
+            # MEMORY AND TEMP DIRECTORY OPTIMIZATIONS
             'worker_tmp_dir': '/dev/shm' if os.path.exists('/dev/shm') else '/tmp',
             
-            # Logging
+            # EXTENSIVE LOGGING for debugging
             'accesslog': '-',
             'errorlog': '-',
-            'loglevel': LOG_LEVEL.lower(),
+            'loglevel': 'debug',  # Maximum logging
+            'access_log_format': '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" [%(D)s]',  # Include response time
             
-            # Security and stability
-            'limit_request_line': 8190,
+            # SECURITY AND STABILITY
+            'limit_request_line': 4096,
             'limit_request_fields': 100,
             'limit_request_field_size': 8190,
             
-            # Process naming
-            'proc_name': 'map-dashboard',
+            # PROCESS NAMING for easier debugging
+            'proc_name': 'map-dashboard-debug',
             
-            # Graceful timeout
-            'graceful_timeout': 30,
+            # DEBUGGING-SPECIFIC SETTINGS
+            'capture_output': True,  # Capture worker output
+            'enable_stdio_inheritance': True,  # Better logging
+            
+            # WORKER LIFECYCLE MANAGEMENT
+            'max_worker_memory': 4000000000,  # 4GB limit per worker (if supported)
+            'worker_memory_limit': '4GB',  # Alternative memory limit format
         }
         
-        print(f"🏃 Starting Gunicorn server (Linux/Unix)...")
-        print(f"   Workers: {workers}")
+        print(f"🏃 Starting Gunicorn server (Linux/Unix) with debugging configuration...")
+        print(f"   Workers: {workers} (FORCED TO 1 FOR DEBUGGING)")
         print(f"   Threads per worker: {options['threads']}")
-        print(f"   Timeout: {options['timeout']}s")
+        print(f"   Timeout: {options['timeout']}s (EXTENDED FOR DEBUGGING)")
+        print(f"   Graceful timeout: {options['graceful_timeout']}s")
+        print(f"   Worker temp dir: {options['worker_tmp_dir']}")
         print(f"   Binding to: {options['bind']}")
+        print(f"   Max requests per worker: {options['max_requests']} (LOW FOR DEBUGGING)")
+        print(f"   Preload app: {options['preload_app']} (DISABLED FOR DEBUGGING)")
         
-        app_runner = OptimizedGunicornApp(app, options)
+        app_runner = DebugOptimizedGunicornApp(app, options)
         app_runner.run()
         
     except ImportError:
@@ -240,19 +269,49 @@ def run_development_server(host='127.0.0.1', port=5001):
         app.run(
             host=host, 
             port=port, 
-            debug=DEBUG,
+            debug=True,  # Enable debug for easier troubleshooting
             threaded=True,
-            use_reloader=False
+            use_reloader=False,
+            request_handler=None  # Use default handler
         )
         return True
     except Exception as e:
         print(f"❌ Development server failed: {e}")
         return False
 
+def check_system_limits():
+    """Check system limits that might cause SIGKILL"""
+    print("🔍 Checking system limits...")
+    
+    try:
+        # Check file descriptor limits
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        print(f"   File descriptors: {soft} (soft) / {hard} (hard)")
+        
+        if soft < 1024:
+            print("   ⚠️  Low file descriptor limit - might cause issues")
+        
+        # Check memory limits (if available)
+        try:
+            soft_mem, hard_mem = resource.getrlimit(resource.RLIMIT_AS)
+            if soft_mem != resource.RLIM_INFINITY:
+                print(f"   Memory limit: {soft_mem / (1024**3):.1f}GB")
+        except (AttributeError, OSError):
+            print("   Memory limit: Not available/unlimited")
+            
+        # Check if we're in a container
+        if os.path.exists('/.dockerenv'):
+            print("   🐳 Running inside Docker container")
+            print("   💡 Check container memory limits with: docker stats")
+        
+    except Exception as e:
+        print(f"   Could not check limits: {e}")
+
 def main():
-    """Main server startup function"""
-    print("🚀 MAP DASHBOARD PRODUCTION SERVER")
-    print("=" * 50)
+    """Main server startup function with debugging enhancements"""
+    print("🚀 MAP DASHBOARD PRODUCTION SERVER (DEBUG MODE)")
+    print("=" * 60)
     
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers()
@@ -264,15 +323,27 @@ def main():
     print(f"   CPUs: {system_info['cpu_count']}")
     print(f"   Memory: {system_info['total_memory_gb']:.1f}GB total, {system_info['available_memory_gb']:.1f}GB available")
     
+    # Check system limits
+    check_system_limits()
+    
     # Check memory requirements
     if not check_memory_requirements():
         print("⚠️  Memory warning issued but continuing...")
     
-    # Calculate optimal worker count
-    optimal_workers = calculate_optimal_workers(system_info)
-    print(f"⚙️  Calculated optimal workers: {optimal_workers}")
+    # Calculate optimal worker count (FORCED TO 1 FOR DEBUGGING)
+    optimal_workers = calculate_optimal_workers(system_info, force_single=True)
+    print(f"⚙️  Worker count: {optimal_workers} (FORCED TO 1 FOR DEBUGGING)")
+    
+    # Print debugging information
+    print(f"🔧 Debug Configuration:")
+    print(f"   Single worker mode: ENABLED")
+    print(f"   Extended timeouts: ENABLED")
+    print(f"   Verbose logging: ENABLED")
+    print(f"   Preload disabled: ENABLED")
+    print(f"   RAM temp directory: ENABLED")
     
     # Pre-load application data
+    print(f"📊 Starting data loading...")
     if not pre_load_data():
         print("❌ Failed to load application data")
         sys.exit(1)
@@ -285,16 +356,16 @@ def main():
     print(f"🌐 Server configuration:")
     print(f"   Host: {host}")
     print(f"   Port: {port}")
-    print(f"   Environment: {'Development' if DEBUG else 'Production'}")
+    print(f"   Environment: {'Development' if DEBUG else 'Production'} (DEBUG MODE)")
     
     # Start appropriate server
     success = False
     
     if is_windows:
-        print("🪟 Windows platform detected, using Waitress...")
+        print("🪟 Windows platform detected, using Waitress with extended timeouts...")
         success = run_waitress_server(host, port)
     else:
-        print("🐧 Linux/Unix platform detected, using Gunicorn...")
+        print("🐧 Linux/Unix platform detected, using Gunicorn with debug configuration...")
         success = run_gunicorn_server(optimal_workers, host, port)
     
     # Fallback to development server if production servers fail

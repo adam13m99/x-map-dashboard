@@ -1,10 +1,10 @@
 import os
 from datetime import datetime
-import re # For splitting vendor codes
-import threading # For opening browser without blocking
-import webbrowser # For opening browser
-import time # For delay before opening browser
-import random # For population heatmap point generation
+import re 
+import threading 
+import webbrowser 
+import time 
+import random 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -17,10 +17,8 @@ import hashlib
 import math
 from functools import lru_cache
 from mini import fetch_question_data
-from scipy import stats  # NEW: Added for improved statistical functions
+from scipy import stats  
 
-# Configuration settings are centralized in ``config.py`` so that credentials
-# and other tunable constants live in a single location.
 from config import (
     METABASE_URL,
     METABASE_USERNAME,
@@ -104,6 +102,47 @@ def safe_tolist(series):
     if pd.api.types.is_numeric_dtype(cleaned.dtype):
         return [item.item() if hasattr(item, 'item') else item for item in cleaned]
     return cleaned.tolist()
+
+def optimize_dataframe_memory(df):
+    """
+    Optimize DataFrame memory usage by converting appropriate columns to categories
+    and downcasting numeric types.
+    """
+    if df is None or df.empty:
+        return df
+    
+    original_memory = df.memory_usage(deep=True).sum() / 1024**2
+    
+    # Convert object columns to category where appropriate
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Convert to category if less than 50% unique values
+            if df[col].nunique() / len(df) < 0.5:
+                try:
+                    df[col] = df[col].astype('category')
+                except Exception:
+                    pass  # Skip if conversion fails
+    
+    # Downcast numeric types
+    for col in df.select_dtypes(include=['int64']).columns:
+        try:
+            df[col] = pd.to_numeric(df[col], downcast='integer')
+        except Exception:
+            pass
+    
+    for col in df.select_dtypes(include=['float64']).columns:
+        try:
+            df[col] = pd.to_numeric(df[col], downcast='float')
+        except Exception:
+            pass
+    
+    optimized_memory = df.memory_usage(deep=True).sum() / 1024**2
+    saved_mb = original_memory - optimized_memory
+    
+    if saved_mb > 0:
+        print(f"   💾 Memory optimized: {original_memory:.1f}MB → {optimized_memory:.1f}MB (saved {saved_mb:.1f}MB)")
+    
+    return df
 
 def load_tehran_shapefile(filename):
     shp_path = os.path.join(SRC_DIR, 'polygons', 'tehran_districts', filename)
@@ -673,24 +712,13 @@ def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
     return aggregated[['lat', 'lng', 'value']]
 
 def load_data():
-    """Load all required datasets from Metabase and local sources.
-
-    This function populates global data frames used by the API layer. It is
-    executed at start-up both in development and production environments.
-    """
+    """Load all required datasets from Metabase and local sources with memory optimization."""
     global df_orders, df_vendors, gdf_marketing_areas, gdf_tehran_region, gdf_tehran_main_districts, df_coverage_targets, target_lookup_dict
     print("Loading data...")
     start_time = time.time()
+    
     try:
-        # Specify dtypes to reduce memory usage and speed up loading
-        dtype_dict = {
-            'city_id': 'Int64',
-            'business_line': 'category',
-            'marketing_area': 'category',
-            'vendor_code': 'str',
-            'organic': 'int8'
-        }
-        
+        # 1. ORDER DATA - Load and optimize
         print(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
         df_orders = fetch_question_data(
             question_id=ORDER_DATA_QUESTION_ID,
@@ -698,21 +726,42 @@ def load_data():
             username=METABASE_USERNAME,
             password=METABASE_PASSWORD
         )
-        df_orders = df_orders.astype(dtype_dict)
-        df_orders['created_at'] = pd.to_datetime(df_orders['created_at'], errors='coerce')
-        df_orders['created_at'] = df_orders['created_at'].dt.tz_localize(None)
-        df_orders['city_name'] = df_orders['city_id'].map(city_id_map).astype('category')
         
-        if 'organic' not in df_orders.columns:
-            # If organic column doesn't exist, create a random one for demo
-            df_orders['organic'] = np.random.choice([0, 1], size=len(df_orders), p=[0.7, 0.3]).astype('int8')
-                
-        print(f"Orders loaded: {len(df_orders)} rows in {time.time() - start_time:.2f}s")
+        if df_orders is not None and not df_orders.empty:
+            # Specify dtypes to reduce memory usage and speed up loading
+            dtype_dict = {
+                'city_id': 'Int64',
+                'business_line': 'category',
+                'marketing_area': 'category',
+                'vendor_code': 'str',
+                'organic': 'int8'
+            }
+            
+            # Apply only dtypes that exist in the dataframe
+            existing_dtypes = {k: v for k, v in dtype_dict.items() if k in df_orders.columns}
+            df_orders = df_orders.astype(existing_dtypes)
+            
+            # APPLY MEMORY OPTIMIZATION IMMEDIATELY
+            df_orders = optimize_dataframe_memory(df_orders)
+            
+            df_orders['created_at'] = pd.to_datetime(df_orders['created_at'], errors='coerce')
+            df_orders['created_at'] = df_orders['created_at'].dt.tz_localize(None)
+            df_orders['city_name'] = df_orders['city_id'].map(city_id_map).astype('category')
+            
+            if 'organic' not in df_orders.columns:
+                # If organic column doesn't exist, create a random one for demo
+                df_orders['organic'] = np.random.choice([0, 1], size=len(df_orders), p=[0.7, 0.3]).astype('int8')
+            
+            print(f"Orders loaded: {len(df_orders)} rows in {time.time() - start_time:.2f}s")
+        else:
+            df_orders = pd.DataFrame()
+            print("No order data received")
+            
     except Exception as e:
         print(f"Error loading order data: {e}")
         df_orders = pd.DataFrame()
         
-    # 2. Vendor Data
+    # 2. VENDOR DATA - Load and optimize  
     graded_file = os.path.join(SRC_DIR, 'vendor', 'graded.csv')
     try:
         vendor_start = time.time()
@@ -734,64 +783,79 @@ def load_data():
             username=METABASE_USERNAME,
             password=METABASE_PASSWORD
         )
-        df_vendors_raw = df_vendors_raw.astype(vendor_dtype)
-        df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
         
-        # MODIFIED: Use the business_line from df_vendors directly, don't override it
-        df_vendors = df_vendors_raw.copy()
-        
-        # Debug: Print business line info
-        if 'business_line' in df_vendors.columns:
-            print(f"Business lines in vendors: {sorted(df_vendors['business_line'].unique())}")
-            print(f"Business line counts: {df_vendors['business_line'].value_counts()}")
-        else:
-            print("WARNING: business_line column not found in vendor data!")
-        
-        try:
-            df_graded_data = pd.read_csv(graded_file, dtype={'vendor_code': 'str', 'grade': 'category'})
-            if 'vendor_code' in df_vendors.columns and 'vendor_code' in df_graded_data.columns:
-                df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
-                df_graded_data['vendor_code'] = df_graded_data['vendor_code'].astype(str)
-                df_vendors = pd.merge(df_vendors, df_graded_data[['vendor_code', 'grade']], on='vendor_code', how='left')
-                if 'grade' in df_vendors.columns and isinstance(df_vendors['grade'].dtype, pd.CategoricalDtype):
-                    df_vendors['grade'] = df_vendors['grade'].cat.add_categories(['Ungraded'])
-                df_vendors['grade'] = df_vendors['grade'].fillna('Ungraded').astype('category')
-                print(f"Grades loaded and merged. Found {df_vendors['grade'].notna().sum()} graded vendors.")
+        if df_vendors_raw is not None and not df_vendors_raw.empty:
+            # Apply only dtypes that exist in the dataframe
+            existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
+            df_vendors_raw = df_vendors_raw.astype(existing_vendor_dtypes)
+            
+            # APPLY MEMORY OPTIMIZATION IMMEDIATELY
+            df_vendors_raw = optimize_dataframe_memory(df_vendors_raw)
+            
+            df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
+            
+            # MODIFIED: Use the business_line from df_vendors directly, don't override it
+            df_vendors = df_vendors_raw.copy()
+            
+            # Debug: Print business line info
+            if 'business_line' in df_vendors.columns:
+                print(f"Business lines in vendors: {sorted(df_vendors['business_line'].unique())}")
+                print(f"Business line counts: {df_vendors['business_line'].value_counts()}")
             else:
-                print("Warning: 'vendor_code' column missing in vendors or graded CSV. Grades not merged.")
+                print("WARNING: business_line column not found in vendor data!")
+            
+            try:
+                df_graded_data = pd.read_csv(graded_file, dtype={'vendor_code': 'str', 'grade': 'category'})
+                if 'vendor_code' in df_vendors.columns and 'vendor_code' in df_graded_data.columns:
+                    df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
+                    df_graded_data['vendor_code'] = df_graded_data['vendor_code'].astype(str)
+                    df_vendors = pd.merge(df_vendors, df_graded_data[['vendor_code', 'grade']], on='vendor_code', how='left')
+                    if 'grade' in df_vendors.columns and isinstance(df_vendors['grade'].dtype, pd.CategoricalDtype):
+                        df_vendors['grade'] = df_vendors['grade'].cat.add_categories(['Ungraded'])
+                    df_vendors['grade'] = df_vendors['grade'].fillna('Ungraded').astype('category')
+                    print(f"Grades loaded and merged. Found {df_vendors['grade'].notna().sum()} graded vendors.")
+                else:
+                    print("Warning: 'vendor_code' column missing in vendors or graded CSV. Grades not merged.")
+                    if 'grade' not in df_vendors.columns: 
+                        df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
+            except Exception as eg:
+                print(f"Error loading or merging graded.csv: {eg}. Proceeding without grades.")
                 if 'grade' not in df_vendors.columns: 
                     df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
-        except Exception as eg:
-            print(f"Error loading or merging graded.csv: {eg}. Proceeding without grades.")
-            if 'grade' not in df_vendors.columns: 
-                df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
-        
-        # REMOVED: Don't override business_line from orders - use the one from vendors directly
-        
-        for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code']:
-            if col not in df_vendors.columns: df_vendors[col] = np.nan
             
-        # FIX: Proper NaN handling for numeric columns
-        if 'visible' in df_vendors.columns: 
-            df_vendors['visible'] = safe_numeric_conversion(df_vendors['visible'])
-        if 'open' in df_vendors.columns: 
-            df_vendors['open'] = safe_numeric_conversion(df_vendors['open'])
-        if 'status_id' in df_vendors.columns: 
-            df_vendors['status_id'] = safe_numeric_conversion(df_vendors['status_id'])
-        if 'latitude' in df_vendors.columns: 
-            df_vendors['latitude'] = safe_numeric_conversion(df_vendors['latitude'])
-        if 'longitude' in df_vendors.columns: 
-            df_vendors['longitude'] = safe_numeric_conversion(df_vendors['longitude'])
-        if 'radius' in df_vendors.columns: 
-            df_vendors['radius'] = safe_numeric_conversion(df_vendors['radius'])
-        if 'vendor_code' in df_vendors.columns: 
-            df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
-        
-        # Store original radius for reset functionality
-        if 'radius' in df_vendors.columns:
-            df_vendors['original_radius'] = df_vendors['radius'].copy()
+            # REMOVED: Don't override business_line from orders - use the one from vendors directly
             
-        print(f"Vendors loaded: {len(df_vendors)} rows in {time.time() - vendor_start:.2f}s")
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code']:
+                if col not in df_vendors.columns: df_vendors[col] = np.nan
+                
+            # FIX: Proper NaN handling for numeric columns
+            if 'visible' in df_vendors.columns: 
+                df_vendors['visible'] = safe_numeric_conversion(df_vendors['visible'])
+            if 'open' in df_vendors.columns: 
+                df_vendors['open'] = safe_numeric_conversion(df_vendors['open'])
+            if 'status_id' in df_vendors.columns: 
+                df_vendors['status_id'] = safe_numeric_conversion(df_vendors['status_id'])
+            if 'latitude' in df_vendors.columns: 
+                df_vendors['latitude'] = safe_numeric_conversion(df_vendors['latitude'])
+            if 'longitude' in df_vendors.columns: 
+                df_vendors['longitude'] = safe_numeric_conversion(df_vendors['longitude'])
+            if 'radius' in df_vendors.columns: 
+                df_vendors['radius'] = safe_numeric_conversion(df_vendors['radius'])
+            if 'vendor_code' in df_vendors.columns: 
+                df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
+            
+            # Store original radius for reset functionality
+            if 'radius' in df_vendors.columns:
+                df_vendors['original_radius'] = df_vendors['radius'].copy()
+                
+            # FINAL MEMORY OPTIMIZATION after all processing
+            df_vendors = optimize_dataframe_memory(df_vendors)
+                
+            print(f"Vendors loaded: {len(df_vendors)} rows in {time.time() - vendor_start:.2f}s")
+        else:
+            df_vendors = pd.DataFrame()
+            print("No vendor data received")
+            
     except Exception as e:
         print(f"Error loading vendor data: {e}")
         df_vendors = pd.DataFrame()
@@ -870,6 +934,20 @@ def load_data():
     
     gdf_tehran_region = load_tehran_shapefile('RegionTehran_WGS1984.shp')
     gdf_tehran_main_districts = load_tehran_shapefile('Tehran_WGS1984.shp')
+    
+    # Memory usage summary
+    total_memory_mb = 0
+    if df_orders is not None and not df_orders.empty:
+        orders_memory = df_orders.memory_usage(deep=True).sum() / 1024**2
+        total_memory_mb += orders_memory
+        print(f"   📊 Orders memory: {orders_memory:.1f} MB")
+    
+    if df_vendors is not None and not df_vendors.empty:
+        vendors_memory = df_vendors.memory_usage(deep=True).sum() / 1024**2
+        total_memory_mb += vendors_memory
+        print(f"   🏪 Vendors memory: {vendors_memory:.1f} MB")
+    
+    print(f"   💾 Total DataFrame memory: {total_memory_mb:.1f} MB")
     
     total_time = time.time() - start_time
     print(f"Data loading complete in {total_time:.2f} seconds.")

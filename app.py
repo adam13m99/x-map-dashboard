@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import re 
 import threading 
 import webbrowser 
@@ -736,20 +736,19 @@ def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
     
     return aggregated[['lat', 'lng', 'value']]
 
-# NEW: Auto-refresh functions
+# Enhanced refresh functions with better timing tracking
 def refresh_vendor_data():
-    """Refresh vendor data from Metabase with error handling and retries"""
+    """Enhanced vendor data refresh with precise timing tracking"""
     global df_vendors, refresh_stats
     
     logger.info("🔄 Starting vendor data refresh...")
     
     graded_file = os.path.join(SRC_DIR, 'vendor', 'graded.csv')
     retry_count = 0
+    refresh_start_time = datetime.now()
     
     while retry_count < AUTO_REFRESH_MAX_RETRIES:
         try:
-            refresh_start = time.time()
-            
             # Fetch fresh vendor data
             logger.info(f"🚀 Fetching LIVE vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
             df_vendors_raw = fetch_question_data(
@@ -775,13 +774,8 @@ def refresh_vendor_data():
             
             existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
             df_vendors_raw = df_vendors_raw.astype(existing_vendor_dtypes)
-            
-            # Apply memory optimization
             df_vendors_raw = optimize_dataframe_memory(df_vendors_raw)
-            
             df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
-            
-            # Copy to new vendor dataframe
             df_vendors_new = df_vendors_raw.copy()
             
             # Load graded data
@@ -837,17 +831,19 @@ def refresh_vendor_data():
                 df_vendors = df_vendors_new
                 new_vendor_count = len(df_vendors)
                 
-                # Update refresh stats
-                refresh_stats['vendor_last_refresh'] = datetime.now()
+                # Update refresh stats with precise timing
+                refresh_end_time = datetime.now()
+                refresh_stats['vendor_last_refresh'] = refresh_end_time
                 refresh_stats['vendor_refresh_count'] += 1
                 refresh_stats['vendor_refresh_errors'] = 0  # Reset error count on success
             
-            refresh_time = time.time() - refresh_start
+            refresh_duration = (refresh_end_time - refresh_start_time).total_seconds()
             vendor_change = new_vendor_count - old_vendor_count
             change_str = f"({vendor_change:+d})" if vendor_change != 0 else "(no change)"
             
-            logger.info(f"✅ Vendor data refreshed successfully in {refresh_time:.2f}s")
+            logger.info(f"✅ Vendor data refreshed successfully in {refresh_duration:.2f}s")
             logger.info(f"   Vendors: {old_vendor_count:,} → {new_vendor_count:,} {change_str}")
+            logger.info(f"   Next vendor refresh scheduled for: {refresh_end_time + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)}")
             
             # Clear coverage cache since vendor data changed
             coverage_cache.clear()
@@ -871,17 +867,16 @@ def refresh_vendor_data():
     return False
 
 def refresh_order_data():
-    """Refresh order data from Metabase with error handling and retries"""
+    """Enhanced order data refresh with precise timing tracking"""
     global df_orders, refresh_stats
     
     logger.info("🔄 Starting order data refresh...")
     
     retry_count = 0
+    refresh_start_time = datetime.now()
     
     while retry_count < AUTO_REFRESH_MAX_RETRIES:
         try:
-            refresh_start = time.time()
-            
             # Fetch fresh order data
             logger.info(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
             df_orders_new = fetch_question_data(
@@ -905,10 +900,7 @@ def refresh_order_data():
             
             existing_dtypes = {k: v for k, v in dtype_dict.items() if k in df_orders_new.columns}
             df_orders_new = df_orders_new.astype(existing_dtypes)
-            
-            # Apply memory optimization
             df_orders_new = optimize_dataframe_memory(df_orders_new)
-            
             df_orders_new['created_at'] = pd.to_datetime(df_orders_new['created_at'], errors='coerce')
             df_orders_new['created_at'] = df_orders_new['created_at'].dt.tz_localize(None)
             df_orders_new['city_name'] = df_orders_new['city_id'].map(city_id_map).astype('category')
@@ -923,17 +915,19 @@ def refresh_order_data():
                 df_orders = df_orders_new
                 new_order_count = len(df_orders)
                 
-                # Update refresh stats
-                refresh_stats['order_last_refresh'] = datetime.now()
+                # Update refresh stats with precise timing
+                refresh_end_time = datetime.now()
+                refresh_stats['order_last_refresh'] = refresh_end_time
                 refresh_stats['order_refresh_count'] += 1
                 refresh_stats['order_refresh_errors'] = 0  # Reset error count on success
             
-            refresh_time = time.time() - refresh_start
+            refresh_duration = (refresh_end_time - refresh_start_time).total_seconds()
             order_change = new_order_count - old_order_count
             change_str = f"({order_change:+d})" if order_change != 0 else "(no change)"
             
-            logger.info(f"✅ Order data refreshed successfully in {refresh_time:.2f}s")
+            logger.info(f"✅ Order data refreshed successfully in {refresh_duration:.2f}s")
             logger.info(f"   Orders: {old_order_count:,} → {new_order_count:,} {change_str}")
+            logger.info(f"   Next order refresh scheduled for: {refresh_end_time + timedelta(minutes=ORDER_REFRESH_INTERVAL_MINUTES)}")
             
             return True
             
@@ -1316,25 +1310,46 @@ def get_initial_data():
         "vendor_grades": vendor_grades
     })
 
-# NEW: Auto-refresh status endpoint
 @app.route('/api/refresh-status', methods=['GET'])
 def get_refresh_status():
-    """Get the current status of auto-refresh system"""
+    """Get the current status of auto-refresh system with enhanced timing info"""
     with data_lock:
+        current_time = datetime.now()
+        
+        # Calculate next refresh times
+        vendor_next_refresh = None
+        order_next_refresh = None
+        
+        if refresh_stats['vendor_last_refresh']:
+            vendor_next_refresh = refresh_stats['vendor_last_refresh'] + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)
+        else:
+            # If never refreshed, next refresh is the startup delay from now
+            vendor_next_refresh = current_time + timedelta(seconds=REFRESH_ON_STARTUP_DELAY_SECONDS)
+            
+        if refresh_stats['order_last_refresh']:
+            order_next_refresh = refresh_stats['order_last_refresh'] + timedelta(minutes=ORDER_REFRESH_INTERVAL_MINUTES)
+        else:
+            order_next_refresh = current_time + timedelta(seconds=REFRESH_ON_STARTUP_DELAY_SECONDS)
+        
         status = {
             "refresh_enabled": ENABLE_AUTO_REFRESH,
             "refresh_active": refresh_stats['refresh_active'],
+            "current_time": current_time.isoformat(),
             "vendor_refresh": {
                 "interval_minutes": VENDOR_REFRESH_INTERVAL_MINUTES,
                 "last_refresh": refresh_stats['vendor_last_refresh'].isoformat() if refresh_stats['vendor_last_refresh'] else None,
+                "next_refresh": vendor_next_refresh.isoformat() if vendor_next_refresh else None,
                 "refresh_count": refresh_stats['vendor_refresh_count'],
-                "error_count": refresh_stats['vendor_refresh_errors']
+                "error_count": refresh_stats['vendor_refresh_errors'],
+                "seconds_until_next": int((vendor_next_refresh - current_time).total_seconds()) if vendor_next_refresh and vendor_next_refresh > current_time else 0
             },
             "order_refresh": {
                 "interval_minutes": ORDER_REFRESH_INTERVAL_MINUTES,
                 "last_refresh": refresh_stats['order_last_refresh'].isoformat() if refresh_stats['order_last_refresh'] else None,
+                "next_refresh": order_next_refresh.isoformat() if order_next_refresh else None,
                 "refresh_count": refresh_stats['order_refresh_count'],
-                "error_count": refresh_stats['order_refresh_errors']
+                "error_count": refresh_stats['order_refresh_errors'],
+                "seconds_until_next": int((order_next_refresh - current_time).total_seconds()) if order_next_refresh and order_next_refresh > current_time else 0
             },
             "current_data_counts": {
                 "vendors": len(df_vendors) if df_vendors is not None else 0,
@@ -1344,27 +1359,65 @@ def get_refresh_status():
     
     return jsonify(status)
 
-# NEW: Manual refresh trigger endpoint
 @app.route('/api/refresh-now', methods=['POST'])
 def trigger_manual_refresh():
-    """Manually trigger data refresh"""
-    data_type = request.json.get('type', 'both') if request.is_json else 'both'
-    
-    results = {}
-    
-    if data_type in ['vendor', 'both']:
-        logger.info("🔄 Manual vendor refresh triggered")
-        results['vendor_success'] = refresh_vendor_data()
-    
-    if data_type in ['order', 'both']:
-        logger.info("🔄 Manual order refresh triggered")
-        results['order_success'] = refresh_order_data()
-    
-    return jsonify({
-        "success": all(results.values()),
-        "results": results,
-        "message": f"Manual refresh {'successful' if all(results.values()) else 'completed with errors'}"
-    })
+    """Enhanced manual refresh trigger with separate vendor/order control"""
+    try:
+        request_data = request.get_json() if request.is_json else {}
+        data_type = request_data.get('type', 'both')
+        
+        if data_type not in ['vendor', 'order', 'both']:
+            return jsonify({
+                "success": False,
+                "error": "Invalid refresh type. Must be 'vendor', 'order', or 'both'"
+            }), 400
+        
+        results = {}
+        overall_success = True
+        
+        if data_type in ['vendor', 'both']:
+            logger.info("🔄 Manual vendor refresh triggered via API")
+            vendor_success = refresh_vendor_data()
+            results['vendor_success'] = vendor_success
+            if not vendor_success:
+                overall_success = False
+        
+        if data_type in ['order', 'both']:
+            logger.info("🔄 Manual order refresh triggered via API")
+            order_success = refresh_order_data()
+            results['order_success'] = order_success
+            if not order_success:
+                overall_success = False
+        
+        # Provide detailed response
+        response_data = {
+            "success": overall_success,
+            "results": results,
+            "type_requested": data_type,
+            "message": f"Manual {data_type} refresh {'successful' if overall_success else 'completed with errors'}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Add next refresh times to response
+        with data_lock:
+            current_time = datetime.now()
+            if 'vendor_success' in results and results['vendor_success']:
+                vendor_next = current_time + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)
+                response_data['vendor_next_refresh'] = vendor_next.isoformat()
+            
+            if 'order_success' in results and results['order_success']:
+                order_next = current_time + timedelta(minutes=ORDER_REFRESH_INTERVAL_MINUTES)
+                response_data['order_next_refresh'] = order_next.isoformat()
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"❌ Manual refresh API error: {e}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "message": "Manual refresh failed due to server error"
+        }), 500
 
 def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filtered, df_o_all_for_city):
     """

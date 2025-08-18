@@ -10,7 +10,7 @@ os.environ.setdefault('MALLOC_MMAP_MAX_', '65536')
 # Metabase connection details
 METABASE_URL = os.getenv("METABASE_URL", "https://metabase.ofood.cloud")
 METABASE_USERNAME = os.getenv("METABASE_USERNAME", "xmap@ofood.cloud")
-METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "MrpD7vlTk468")
+METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "METABASE_PASSWORD")
 
 # Metabase question IDs
 ORDER_DATA_QUESTION_ID = int(os.getenv("ORDER_DATA_QUESTION_ID", "5822"))
@@ -26,8 +26,8 @@ CACHE_SIZE = int(os.getenv("CACHE_SIZE", "50"))  # REDUCED: Smaller cache for si
 
 # AUTO-REFRESH CONFIGURATION - NEW: Add auto-refresh settings
 ENABLE_AUTO_REFRESH = os.getenv("ENABLE_AUTO_REFRESH", "True").lower() in ("true", "1", "yes")
-VENDOR_REFRESH_INTERVAL_MINUTES = int(os.getenv("VENDOR_REFRESH_INTERVAL_MINUTES", "2"))
-ORDER_REFRESH_INTERVAL_MINUTES = int(os.getenv("ORDER_REFRESH_INTERVAL_MINUTES", "300"))  # Orders refresh less frequently
+VENDOR_REFRESH_INTERVAL_MINUTES = int(os.getenv("VENDOR_REFRESH_INTERVAL_MINUTES", "10"))
+ORDER_REFRESH_INTERVAL_MINUTES = int(os.getenv("ORDER_REFRESH_INTERVAL_MINUTES", "720"))  # Orders refresh less frequently
 REFRESH_ON_STARTUP_DELAY_SECONDS = int(os.getenv("REFRESH_ON_STARTUP_DELAY_SECONDS", "120"))  # Wait 2 minutes after startup
 AUTO_REFRESH_MAX_RETRIES = int(os.getenv("AUTO_REFRESH_MAX_RETRIES", "3"))
 AUTO_REFRESH_RETRY_DELAY_SECONDS = int(os.getenv("AUTO_REFRESH_RETRY_DELAY_SECONDS", "30"))

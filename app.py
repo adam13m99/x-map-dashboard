@@ -17,7 +17,8 @@ import hashlib
 import math
 from functools import lru_cache
 from mini import fetch_question_data
-from scipy import stats  
+from scipy import stats
+import logging
 
 from config import (
     METABASE_URL,
@@ -29,12 +30,23 @@ from config import (
     PAGE_SIZE,
     CACHE_SIZE,
     city_boundaries,
+    # NEW: Auto-refresh configuration
+    ENABLE_AUTO_REFRESH,
+    VENDOR_REFRESH_INTERVAL_MINUTES,
+    ORDER_REFRESH_INTERVAL_MINUTES,
+    REFRESH_ON_STARTUP_DELAY_SECONDS,
+    AUTO_REFRESH_MAX_RETRIES,
+    AUTO_REFRESH_RETRY_DELAY_SECONDS,
 )
 
 # --- Configuration ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(BASE_DIR, 'src')
 PUBLIC_DIR = os.path.join(BASE_DIR, 'public')
+
+# Setup logging for auto-refresh
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Initialize Flask App ---
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path='')
@@ -54,6 +66,19 @@ df_coverage_targets = None
 target_lookup_dict = {}    # --- MODIFIED: Will use area_id ---
 city_id_map = {1: "mashhad", 2: "tehran", 5: "shiraz"}
 city_name_to_id_map = {v: k for k, v in city_id_map.items()}
+
+# NEW: Thread safety for auto-refresh
+data_lock = threading.Lock()
+refresh_threads = {}
+refresh_stats = {
+    'vendor_last_refresh': None,
+    'vendor_refresh_count': 0,
+    'vendor_refresh_errors': 0,
+    'order_last_refresh': None,
+    'order_refresh_count': 0,
+    'order_refresh_errors': 0,
+    'refresh_active': False
+}
 
 # Simple cache for coverage calculations
 # In-memory cache for coverage calculations. The maximum size is configured
@@ -711,6 +736,292 @@ def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
     
     return aggregated[['lat', 'lng', 'value']]
 
+# NEW: Auto-refresh functions
+def refresh_vendor_data():
+    """Refresh vendor data from Metabase with error handling and retries"""
+    global df_vendors, refresh_stats
+    
+    logger.info("🔄 Starting vendor data refresh...")
+    
+    graded_file = os.path.join(SRC_DIR, 'vendor', 'graded.csv')
+    retry_count = 0
+    
+    while retry_count < AUTO_REFRESH_MAX_RETRIES:
+        try:
+            refresh_start = time.time()
+            
+            # Fetch fresh vendor data
+            logger.info(f"🚀 Fetching LIVE vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
+            df_vendors_raw = fetch_question_data(
+                question_id=VENDOR_DATA_QUESTION_ID,
+                metabase_url=METABASE_URL,
+                username=METABASE_USERNAME,
+                password=METABASE_PASSWORD
+            )
+            
+            if df_vendors_raw is None or df_vendors_raw.empty:
+                raise Exception("No vendor data received from Metabase")
+            
+            # Process the data (same logic as in load_data)
+            vendor_dtype = {
+                'city_id': 'Int64',
+                'vendor_code': 'str',
+                'status_id': 'float32',
+                'visible': 'float32',
+                'open': 'float32',
+                'radius': 'float32',
+                'business_line': 'category'
+            }
+            
+            existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
+            df_vendors_raw = df_vendors_raw.astype(existing_vendor_dtypes)
+            
+            # Apply memory optimization
+            df_vendors_raw = optimize_dataframe_memory(df_vendors_raw)
+            
+            df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
+            
+            # Copy to new vendor dataframe
+            df_vendors_new = df_vendors_raw.copy()
+            
+            # Load graded data
+            try:
+                df_graded_data = pd.read_csv(graded_file, dtype={'vendor_code': 'str', 'grade': 'category'})
+                if 'vendor_code' in df_vendors_new.columns and 'vendor_code' in df_graded_data.columns:
+                    df_vendors_new['vendor_code'] = df_vendors_new['vendor_code'].astype(str)
+                    df_graded_data['vendor_code'] = df_graded_data['vendor_code'].astype(str)
+                    df_vendors_new = pd.merge(df_vendors_new, df_graded_data[['vendor_code', 'grade']], on='vendor_code', how='left')
+                    if 'grade' in df_vendors_new.columns and isinstance(df_vendors_new['grade'].dtype, pd.CategoricalDtype):
+                        df_vendors_new['grade'] = df_vendors_new['grade'].cat.add_categories(['Ungraded'])
+                    df_vendors_new['grade'] = df_vendors_new['grade'].fillna('Ungraded').astype('category')
+                    logger.info(f"Grades loaded and merged. Found {df_vendors_new['grade'].notna().sum()} graded vendors.")
+                else:
+                    if 'grade' not in df_vendors_new.columns: 
+                        df_vendors_new['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors_new))
+            except Exception as eg:
+                logger.warning(f"Error loading or merging graded.csv: {eg}. Proceeding without grades.")
+                if 'grade' not in df_vendors_new.columns: 
+                    df_vendors_new['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors_new))
+            
+            # Handle missing columns and data types
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code']:
+                if col not in df_vendors_new.columns: 
+                    df_vendors_new[col] = np.nan
+                    
+            # Fix NaN handling for numeric columns
+            if 'visible' in df_vendors_new.columns: 
+                df_vendors_new['visible'] = safe_numeric_conversion(df_vendors_new['visible'])
+            if 'open' in df_vendors_new.columns: 
+                df_vendors_new['open'] = safe_numeric_conversion(df_vendors_new['open'])
+            if 'status_id' in df_vendors_new.columns: 
+                df_vendors_new['status_id'] = safe_numeric_conversion(df_vendors_new['status_id'])
+            if 'latitude' in df_vendors_new.columns: 
+                df_vendors_new['latitude'] = safe_numeric_conversion(df_vendors_new['latitude'])
+            if 'longitude' in df_vendors_new.columns: 
+                df_vendors_new['longitude'] = safe_numeric_conversion(df_vendors_new['longitude'])
+            if 'radius' in df_vendors_new.columns: 
+                df_vendors_new['radius'] = safe_numeric_conversion(df_vendors_new['radius'])
+            if 'vendor_code' in df_vendors_new.columns: 
+                df_vendors_new['vendor_code'] = df_vendors_new['vendor_code'].astype(str)
+            
+            # Store original radius for reset functionality
+            if 'radius' in df_vendors_new.columns:
+                df_vendors_new['original_radius'] = df_vendors_new['radius'].copy()
+                
+            # Final memory optimization
+            df_vendors_new = optimize_dataframe_memory(df_vendors_new)
+            
+            # Thread-safe update of global variable
+            with data_lock:
+                old_vendor_count = len(df_vendors) if df_vendors is not None else 0
+                df_vendors = df_vendors_new
+                new_vendor_count = len(df_vendors)
+                
+                # Update refresh stats
+                refresh_stats['vendor_last_refresh'] = datetime.now()
+                refresh_stats['vendor_refresh_count'] += 1
+                refresh_stats['vendor_refresh_errors'] = 0  # Reset error count on success
+            
+            refresh_time = time.time() - refresh_start
+            vendor_change = new_vendor_count - old_vendor_count
+            change_str = f"({vendor_change:+d})" if vendor_change != 0 else "(no change)"
+            
+            logger.info(f"✅ Vendor data refreshed successfully in {refresh_time:.2f}s")
+            logger.info(f"   Vendors: {old_vendor_count:,} → {new_vendor_count:,} {change_str}")
+            
+            # Clear coverage cache since vendor data changed
+            coverage_cache.clear()
+            logger.info("   Coverage cache cleared due to vendor data update")
+            
+            return True
+            
+        except Exception as e:
+            retry_count += 1
+            refresh_stats['vendor_refresh_errors'] += 1
+            
+            logger.error(f"❌ Vendor refresh attempt {retry_count}/{AUTO_REFRESH_MAX_RETRIES} failed: {e}")
+            
+            if retry_count < AUTO_REFRESH_MAX_RETRIES:
+                logger.info(f"   Retrying in {AUTO_REFRESH_RETRY_DELAY_SECONDS} seconds...")
+                time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)
+            else:
+                logger.error("   Max retries reached. Vendor refresh failed.")
+                return False
+    
+    return False
+
+def refresh_order_data():
+    """Refresh order data from Metabase with error handling and retries"""
+    global df_orders, refresh_stats
+    
+    logger.info("🔄 Starting order data refresh...")
+    
+    retry_count = 0
+    
+    while retry_count < AUTO_REFRESH_MAX_RETRIES:
+        try:
+            refresh_start = time.time()
+            
+            # Fetch fresh order data
+            logger.info(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
+            df_orders_new = fetch_question_data(
+                question_id=ORDER_DATA_QUESTION_ID,
+                metabase_url=METABASE_URL,
+                username=METABASE_USERNAME,
+                password=METABASE_PASSWORD
+            )
+            
+            if df_orders_new is None or df_orders_new.empty:
+                raise Exception("No order data received from Metabase")
+            
+            # Process the data (same logic as in load_data)
+            dtype_dict = {
+                'city_id': 'Int64',
+                'business_line': 'category',
+                'marketing_area': 'category',
+                'vendor_code': 'str',
+                'organic': 'int8'
+            }
+            
+            existing_dtypes = {k: v for k, v in dtype_dict.items() if k in df_orders_new.columns}
+            df_orders_new = df_orders_new.astype(existing_dtypes)
+            
+            # Apply memory optimization
+            df_orders_new = optimize_dataframe_memory(df_orders_new)
+            
+            df_orders_new['created_at'] = pd.to_datetime(df_orders_new['created_at'], errors='coerce')
+            df_orders_new['created_at'] = df_orders_new['created_at'].dt.tz_localize(None)
+            df_orders_new['city_name'] = df_orders_new['city_id'].map(city_id_map).astype('category')
+            
+            if 'organic' not in df_orders_new.columns:
+                # If organic column doesn't exist, create a random one for demo
+                df_orders_new['organic'] = np.random.choice([0, 1], size=len(df_orders_new), p=[0.7, 0.3]).astype('int8')
+            
+            # Thread-safe update of global variable
+            with data_lock:
+                old_order_count = len(df_orders) if df_orders is not None else 0
+                df_orders = df_orders_new
+                new_order_count = len(df_orders)
+                
+                # Update refresh stats
+                refresh_stats['order_last_refresh'] = datetime.now()
+                refresh_stats['order_refresh_count'] += 1
+                refresh_stats['order_refresh_errors'] = 0  # Reset error count on success
+            
+            refresh_time = time.time() - refresh_start
+            order_change = new_order_count - old_order_count
+            change_str = f"({order_change:+d})" if order_change != 0 else "(no change)"
+            
+            logger.info(f"✅ Order data refreshed successfully in {refresh_time:.2f}s")
+            logger.info(f"   Orders: {old_order_count:,} → {new_order_count:,} {change_str}")
+            
+            return True
+            
+        except Exception as e:
+            retry_count += 1
+            refresh_stats['order_refresh_errors'] += 1
+            
+            logger.error(f"❌ Order refresh attempt {retry_count}/{AUTO_REFRESH_MAX_RETRIES} failed: {e}")
+            
+            if retry_count < AUTO_REFRESH_MAX_RETRIES:
+                logger.info(f"   Retrying in {AUTO_REFRESH_RETRY_DELAY_SECONDS} seconds...")
+                time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)
+            else:
+                logger.error("   Max retries reached. Order refresh failed.")
+                return False
+    
+    return False
+
+def schedule_refresh(refresh_func, interval_minutes, name):
+    """Schedule a refresh function to run at regular intervals"""
+    def run_refresh():
+        while True:
+            try:
+                time.sleep(interval_minutes * 60)  # Convert minutes to seconds
+                if refresh_stats['refresh_active']:
+                    logger.info(f"🕐 Scheduled {name} refresh starting...")
+                    refresh_func()
+                    logger.info(f"✅ Scheduled {name} refresh completed")
+                else:
+                    logger.info(f"⏸️  Scheduled {name} refresh skipped (refresh disabled)")
+            except Exception as e:
+                logger.error(f"❌ Error in scheduled {name} refresh: {e}")
+                time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)  # Wait before trying again
+    
+    thread = threading.Thread(target=run_refresh, name=f"{name}_refresh_thread", daemon=True)
+    thread.start()
+    return thread
+
+def start_auto_refresh():
+    """Start the auto-refresh threads"""
+    global refresh_threads
+    
+    if not ENABLE_AUTO_REFRESH:
+        logger.info("🔄 Auto-refresh is disabled")
+        return
+    
+    logger.info("🔄 Starting auto-refresh system...")
+    logger.info(f"   Vendor refresh interval: {VENDOR_REFRESH_INTERVAL_MINUTES} minutes")
+    logger.info(f"   Order refresh interval: {ORDER_REFRESH_INTERVAL_MINUTES} minutes")
+    logger.info(f"   Initial refresh delay: {REFRESH_ON_STARTUP_DELAY_SECONDS} seconds")
+    
+    # Mark refresh as active
+    refresh_stats['refresh_active'] = True
+    
+    # Start vendor refresh thread
+    def delayed_vendor_refresh():
+        time.sleep(REFRESH_ON_STARTUP_DELAY_SECONDS)
+        refresh_threads['vendor'] = schedule_refresh(
+            refresh_vendor_data, 
+            VENDOR_REFRESH_INTERVAL_MINUTES, 
+            "vendor"
+        )
+    
+    # Start order refresh thread
+    def delayed_order_refresh():
+        time.sleep(REFRESH_ON_STARTUP_DELAY_SECONDS)
+        refresh_threads['order'] = schedule_refresh(
+            refresh_order_data, 
+            ORDER_REFRESH_INTERVAL_MINUTES, 
+            "order"
+        )
+    
+    # Start both with initial delay
+    threading.Thread(target=delayed_vendor_refresh, daemon=True).start()
+    threading.Thread(target=delayed_order_refresh, daemon=True).start()
+    
+    logger.info("✅ Auto-refresh threads started")
+
+def stop_auto_refresh():
+    """Stop the auto-refresh system"""
+    global refresh_stats
+    
+    logger.info("🛑 Stopping auto-refresh system...")
+    refresh_stats['refresh_active'] = False
+    
+    # Note: Daemon threads will stop automatically when the main process exits
+    logger.info("✅ Auto-refresh system stopped")
+
 def load_data():
     """Load all required datasets from Metabase and local sources with memory optimization."""
     global df_orders, df_vendors, gdf_marketing_areas, gdf_tehran_region, gdf_tehran_main_districts, df_coverage_targets, target_lookup_dict
@@ -951,6 +1262,13 @@ def load_data():
     
     total_time = time.time() - start_time
     print(f"Data loading complete in {total_time:.2f} seconds.")
+    
+    # NEW: Start auto-refresh after initial data loading
+    if ENABLE_AUTO_REFRESH:
+        try:
+            start_auto_refresh()
+        except Exception as e:
+            logger.error(f"Failed to start auto-refresh: {e}")
 
 # --- Serve Static Files (Frontend) ---
 @app.route('/')
@@ -996,6 +1314,56 @@ def get_initial_data():
         "tehran_main_districts": tehran_main_districts,
         "vendor_statuses": vendor_statuses,
         "vendor_grades": vendor_grades
+    })
+
+# NEW: Auto-refresh status endpoint
+@app.route('/api/refresh-status', methods=['GET'])
+def get_refresh_status():
+    """Get the current status of auto-refresh system"""
+    with data_lock:
+        status = {
+            "refresh_enabled": ENABLE_AUTO_REFRESH,
+            "refresh_active": refresh_stats['refresh_active'],
+            "vendor_refresh": {
+                "interval_minutes": VENDOR_REFRESH_INTERVAL_MINUTES,
+                "last_refresh": refresh_stats['vendor_last_refresh'].isoformat() if refresh_stats['vendor_last_refresh'] else None,
+                "refresh_count": refresh_stats['vendor_refresh_count'],
+                "error_count": refresh_stats['vendor_refresh_errors']
+            },
+            "order_refresh": {
+                "interval_minutes": ORDER_REFRESH_INTERVAL_MINUTES,
+                "last_refresh": refresh_stats['order_last_refresh'].isoformat() if refresh_stats['order_last_refresh'] else None,
+                "refresh_count": refresh_stats['order_refresh_count'],
+                "error_count": refresh_stats['order_refresh_errors']
+            },
+            "current_data_counts": {
+                "vendors": len(df_vendors) if df_vendors is not None else 0,
+                "orders": len(df_orders) if df_orders is not None else 0
+            }
+        }
+    
+    return jsonify(status)
+
+# NEW: Manual refresh trigger endpoint
+@app.route('/api/refresh-now', methods=['POST'])
+def trigger_manual_refresh():
+    """Manually trigger data refresh"""
+    data_type = request.json.get('type', 'both') if request.is_json else 'both'
+    
+    results = {}
+    
+    if data_type in ['vendor', 'both']:
+        logger.info("🔄 Manual vendor refresh triggered")
+        results['vendor_success'] = refresh_vendor_data()
+    
+    if data_type in ['order', 'both']:
+        logger.info("🔄 Manual order refresh triggered")
+        results['order_success'] = refresh_order_data()
+    
+    return jsonify({
+        "success": all(results.values()),
+        "results": results,
+        "message": f"Manual refresh {'successful' if all(results.values()) else 'completed with errors'}"
     })
 
 def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filtered, df_o_all_for_city):
@@ -1082,6 +1450,11 @@ def get_map_data():
         # Start timing
         request_start = time.time()
         
+        # Use thread-safe access to global data
+        with data_lock:
+            df_orders_copy = df_orders.copy() if df_orders is not None else pd.DataFrame()
+            df_vendors_copy = df_vendors.copy() if df_vendors is not None else pd.DataFrame()
+        
         # --- Parsing of filters ---
         city_name = request.args.get('city', default="tehran", type=str)
         start_date_str = request.args.get('start_date')
@@ -1111,7 +1484,7 @@ def get_map_data():
         
         # DEBUG: Print filter info
         print(f"DEBUG: Business line filter = {selected_business_lines}")
-        print(f"DEBUG: Total vendors before filtering = {len(df_vendors)}")
+        print(f"DEBUG: Total vendors before filtering = {len(df_vendors_copy)}")
         
         heatmap_data = []
         vendor_markers = []
@@ -1119,7 +1492,7 @@ def get_map_data():
         coverage_grid_data = []
         
         # --- IMPROVED Vendor filtering logic with better debugging ---
-        df_v_filtered = df_vendors.copy()
+        df_v_filtered = df_vendors_copy.copy()
         
         # Check if required columns exist
         required_vendor_columns = ['latitude', 'longitude', 'vendor_code']
@@ -1158,8 +1531,8 @@ def get_map_data():
             
             # 6. Filter by vendor area (spatial filtering)
             if vendor_area_main_type != 'all' and selected_vendor_area_sub_types and not df_v_filtered.empty:
-                if vendor_area_main_type == 'tapsifood_marketing_areas' and not df_orders.empty and 'marketing_area' in df_orders.columns:
-                    temp_orders_ma = df_orders[df_orders['marketing_area'].isin(selected_vendor_area_sub_types)]
+                if vendor_area_main_type == 'tapsifood_marketing_areas' and not df_orders_copy.empty and 'marketing_area' in df_orders_copy.columns:
+                    temp_orders_ma = df_orders_copy[df_orders_copy['marketing_area'].isin(selected_vendor_area_sub_types)]
                     relevant_vendor_codes_ma = temp_orders_ma['vendor_code'].astype(str).dropna().unique()
                     df_v_filtered = df_v_filtered[df_v_filtered['vendor_code'].isin(relevant_vendor_codes_ma)]
                 elif city_name == 'tehran':
@@ -1200,7 +1573,7 @@ def get_map_data():
                 print("DEBUG: No vendors after filtering")
         
         # --- Prepare filtered and total order dataframes for enrichment ---
-        df_orders_filtered = df_orders.copy()
+        df_orders_filtered = df_orders_copy.copy()
         if city_name != "all": df_orders_filtered = df_orders_filtered[df_orders_filtered['city_name'] == city_name]
         df_orders_all_for_city = df_orders_filtered.copy()
         if start_date: df_orders_filtered = df_orders_filtered[df_orders_filtered['created_at'] >= start_date]
@@ -1393,7 +1766,14 @@ def get_map_data():
             "processing_time": request_time,
             # NEW: Add metadata for frontend optimization
             "zoom_level": zoom_level,
-            "heatmap_type": heatmap_type_req
+            "heatmap_type": heatmap_type_req,
+            # NEW: Add refresh metadata
+            "data_freshness": {
+                "vendor_last_refresh": refresh_stats['vendor_last_refresh'].isoformat() if refresh_stats['vendor_last_refresh'] else None,
+                "order_last_refresh": refresh_stats['order_last_refresh'].isoformat() if refresh_stats['order_last_refresh'] else None,
+                "vendor_refresh_count": refresh_stats['vendor_refresh_count'],
+                "order_refresh_count": refresh_stats['order_refresh_count']
+            }
         }
         
         # FIX: Clean all data to ensure no NaN values in JSON

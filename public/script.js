@@ -1,4 +1,4 @@
-// script.js 
+// Enhanced script.js with Auto-Refresh Status
 document.addEventListener('DOMContentLoaded', () => {
     let map;
     let vendorLayerGroup = L.featureGroup();
@@ -18,6 +18,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentRadiusMode = 'percentage';
     let currentRadiusFixed = 3.0;
     let marketingAreasOnTop = false;
+    
+    // NEW: Auto-refresh status variables
+    let refreshStatusInterval = null;
+    let lastRefreshStatus = null;
     
     // NEW: Improved heatmap management variables
     let currentZoomLevel = 11;
@@ -51,6 +55,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const areaFillColorEl = document.getElementById('area-fill-color');
     const areaFillNoneEl = document.getElementById('area-fill-none');
     const applyFiltersBtn = document.getElementById('apply-filters-btn');
+    
+    // NEW: Auto-refresh status elements
+    const refreshIndicatorEl = document.getElementById('refresh-indicator');
+    const refreshTextEl = document.getElementById('refresh-text');
+    const manualRefreshBtn = document.getElementById('manual-refresh-btn');
+    const vendorRefreshStatusEl = document.getElementById('vendor-refresh-status');
+    const orderRefreshStatusEl = document.getElementById('order-refresh-status');
+    const refreshCountEl = document.getElementById('refresh-count');
+    const forceRefreshBtn = document.getElementById('force-refresh-btn');
     
     // Radius modifier elements
     const vendorRadiusModifierEl = document.getElementById('vendor-radius-modifier');
@@ -143,6 +156,187 @@ document.addEventListener('DOMContentLoaded', () => {
         popupAnchor: [0, -12 * (41/25) * 2],
         shadowSize: [12 * (41/25) * 2, 12 * (41/25) * 2],
     });
+
+    // NEW: Auto-refresh status functions
+    async function fetchRefreshStatus() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/refresh-status`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('Failed to fetch refresh status:', error);
+            return null;
+        }
+    }
+
+    function updateRefreshStatusUI(status) {
+        if (!status) {
+            refreshIndicatorEl.className = 'refresh-indicator offline';
+            refreshTextEl.textContent = 'Status unavailable';
+            vendorRefreshStatusEl.textContent = 'Unknown';
+            orderRefreshStatusEl.textContent = 'Unknown';
+            refreshCountEl.textContent = 'Unknown';
+            return;
+        }
+
+        // Update header status indicator
+        if (!status.refresh_enabled) {
+            refreshIndicatorEl.className = 'refresh-indicator offline';
+            refreshTextEl.textContent = 'Auto-refresh disabled';
+        } else if (status.vendor_refresh.error_count > 0 || status.order_refresh.error_count > 0) {
+            refreshIndicatorEl.className = 'refresh-indicator warning';
+            refreshTextEl.textContent = 'Refresh errors detected';
+        } else {
+            refreshIndicatorEl.className = 'refresh-indicator online';
+            refreshTextEl.textContent = 'Auto-refresh active';
+        }
+
+        // Update sidebar details
+        const now = new Date();
+        
+        // Vendor refresh status
+        if (status.vendor_refresh.last_refresh) {
+            const vendorLastRefresh = new Date(status.vendor_refresh.last_refresh);
+            const vendorAge = Math.floor((now - vendorLastRefresh) / (1000 * 60)); // minutes
+            let vendorStatus = 'Unknown';
+            let vendorClass = '';
+            
+            if (vendorAge < 15) {
+                vendorStatus = `Fresh (${vendorAge}m ago)`;
+                vendorClass = 'fresh';
+            } else if (vendorAge < 60) {
+                vendorStatus = `${vendorAge}m ago`;
+                vendorClass = 'stale';
+            } else {
+                const hours = Math.floor(vendorAge / 60);
+                vendorStatus = `${hours}h ago`;
+                vendorClass = 'stale';
+            }
+            
+            if (status.vendor_refresh.error_count > 0) {
+                vendorStatus += ` (${status.vendor_refresh.error_count} errors)`;
+                vendorClass = 'error';
+            }
+            
+            vendorRefreshStatusEl.textContent = vendorStatus;
+            vendorRefreshStatusEl.className = `refresh-value ${vendorClass}`;
+        } else {
+            vendorRefreshStatusEl.textContent = 'Never';
+            vendorRefreshStatusEl.className = 'refresh-value error';
+        }
+
+        // Order refresh status
+        if (status.order_refresh.last_refresh) {
+            const orderLastRefresh = new Date(status.order_refresh.last_refresh);
+            const orderAge = Math.floor((now - orderLastRefresh) / (1000 * 60)); // minutes
+            let orderStatus = 'Unknown';
+            let orderClass = '';
+            
+            if (orderAge < 30) {
+                orderStatus = `Fresh (${orderAge}m ago)`;
+                orderClass = 'fresh';
+            } else if (orderAge < 120) {
+                orderStatus = `${orderAge}m ago`;
+                orderClass = 'stale';
+            } else {
+                const hours = Math.floor(orderAge / 60);
+                orderStatus = `${hours}h ago`;
+                orderClass = 'stale';
+            }
+            
+            if (status.order_refresh.error_count > 0) {
+                orderStatus += ` (${status.order_refresh.error_count} errors)`;
+                orderClass = 'error';
+            }
+            
+            orderRefreshStatusEl.textContent = orderStatus;
+            orderRefreshStatusEl.className = `refresh-value ${orderClass}`;
+        } else {
+            orderRefreshStatusEl.textContent = 'Never';
+            orderRefreshStatusEl.className = 'refresh-value error';
+        }
+
+        // Refresh counts
+        refreshCountEl.textContent = `V: ${status.vendor_refresh.refresh_count}, O: ${status.order_refresh.refresh_count}`;
+    }
+
+    async function triggerManualRefresh(type = 'both') {
+        try {
+            // Show refreshing state
+            const button = type === 'both' ? forceRefreshBtn : manualRefreshBtn;
+            const originalText = button.textContent;
+            button.textContent = 'Refreshing...';
+            button.classList.add('refreshing');
+            button.disabled = true;
+
+            const response = await fetch(`${API_BASE_URL}/refresh-now`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ type: type })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            // Update status immediately
+            setTimeout(() => {
+                fetchRefreshStatus().then(status => {
+                    if (status) updateRefreshStatusUI(status);
+                });
+            }, 1000);
+
+            console.log('Manual refresh result:', result);
+            
+            // Reset button state
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.classList.remove('refreshing');
+                button.disabled = false;
+            }, 2000);
+
+            return result;
+        } catch (error) {
+            console.error('Manual refresh failed:', error);
+            
+            // Reset button state on error
+            const button = type === 'both' ? forceRefreshBtn : manualRefreshBtn;
+            button.textContent = button === forceRefreshBtn ? 'Force Refresh All' : '🔄';
+            button.classList.remove('refreshing');
+            button.disabled = false;
+            
+            return null;
+        }
+    }
+
+    function startRefreshStatusMonitoring() {
+        // Initial fetch
+        fetchRefreshStatus().then(status => {
+            if (status) updateRefreshStatusUI(status);
+        });
+
+        // Poll every 30 seconds
+        refreshStatusInterval = setInterval(async () => {
+            const status = await fetchRefreshStatus();
+            if (status) {
+                updateRefreshStatusUI(status);
+                lastRefreshStatus = status;
+            }
+        }, 30000);
+    }
+
+    function stopRefreshStatusMonitoring() {
+        if (refreshStatusInterval) {
+            clearInterval(refreshStatusInterval);
+            refreshStatusInterval = null;
+        }
+    }
 
     // NEW: Enhanced heatmap configuration functions
     function calculateOptimalHeatmapParams(data, zoomLevel) {
@@ -328,6 +522,10 @@ document.addEventListener('DOMContentLoaded', () => {
             
             btnToggleVendors.textContent = vendorsAreVisible ? 'Vendors On' : 'Vendors Off';
             btnToggleVendors.classList.toggle('active', vendorsAreVisible);
+            
+            // NEW: Start auto-refresh status monitoring
+            startRefreshStatusMonitoring();
+            
             fetchAndDisplayMapData();
         }).catch(error => {
             console.error("Initialization failed:", error);
@@ -667,6 +865,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         vendorAreaMainTypeEl.addEventListener('change', updateVendorAreaSubTypeFilter);
         
+        // NEW: Auto-refresh event listeners
+        manualRefreshBtn.addEventListener('click', () => {
+            triggerManualRefresh('both');
+        });
+        
+        forceRefreshBtn.addEventListener('click', () => {
+            triggerManualRefresh('both');
+        });
+        
         // Lat/Lng finder
         btnFindLocation.addEventListener('click', () => {
             const lat = parseFloat(latFinderInputEl.value);
@@ -977,6 +1184,15 @@ document.addEventListener('DOMContentLoaded', () => {
             allPolygonsData = data.polygons || null;
             lastHeatmapData = data.heatmap_data || null;
             allCoverageGridData = data.coverage_grid || [];
+
+            // NEW: Update refresh status display with data freshness info
+            if (data.data_freshness) {
+                const freshness = data.data_freshness;
+                if (freshness.vendor_last_refresh) {
+                    const vendorAge = Math.floor((new Date() - new Date(freshness.vendor_last_refresh)) / (1000 * 60));
+                    console.log(`Data freshness: Vendors ${vendorAge}m old, Refreshed ${freshness.vendor_refresh_count} times`);
+                }
+            }
 
             // Debug logging for heatmap data
             if (lastHeatmapData && lastHeatmapData.length > 0) {
@@ -1380,6 +1596,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }).addTo(polygonLayerGroup);
     }
+
+    // Cleanup function for when page unloads
+    window.addEventListener('beforeunload', () => {
+        stopRefreshStatusMonitoring();
+    });
 
     init();
 });

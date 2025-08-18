@@ -1,4 +1,4 @@
-<!-- index.html -->
+<!-- Enhanced index.html with Auto-Refresh Status Indicator -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -13,6 +13,12 @@
         <header class="header">
             <h1>TAPSI FOOD MAP DASHBOARD</h1>
             <p>BY BUSINESS GROWTH TEAM</p>
+            <!-- NEW: Auto-refresh status indicator -->
+            <div class="refresh-status" id="refresh-status">
+                <span class="refresh-indicator" id="refresh-indicator">●</span>
+                <span class="refresh-text" id="refresh-text">Checking data freshness...</span>
+                <button class="refresh-button" id="manual-refresh-btn" title="Manually refresh data">🔄</button>
+            </div>
         </header>
         <div class="filters-top">
              <div class="filter-item">
@@ -137,6 +143,27 @@ or one per line"></textarea>
                         <option value="1">Yes</option>
                         <option value="0">No</option>
                     </select>
+                </div>
+                <hr>
+                <!-- NEW: Data Freshness Section -->
+                <h4>Data Freshness</h4>
+                <div class="filter-item">
+                    <label>Auto-Refresh Status:</label>
+                    <div class="refresh-details" id="refresh-details">
+                        <div class="refresh-detail-item">
+                            <span class="refresh-label">Vendors:</span>
+                            <span class="refresh-value" id="vendor-refresh-status">Loading...</span>
+                        </div>
+                        <div class="refresh-detail-item">
+                            <span class="refresh-label">Orders:</span>
+                            <span class="refresh-value" id="order-refresh-status">Loading...</span>
+                        </div>
+                        <div class="refresh-detail-item">
+                            <span class="refresh-label">Refresh Count:</span>
+                            <span class="refresh-value" id="refresh-count">V: 0, O: 0</span>
+                        </div>
+                    </div>
+                    <button id="force-refresh-btn" class="btn-secondary" style="width: 100%; margin-top: 0.5rem;">Force Refresh All</button>
                 </div>
                 <hr>
                 <h4>Vendor Display</h4>

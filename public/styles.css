@@ -1,4 +1,4 @@
-/* styles.css */
+/* Enhanced styles.css with Auto-Refresh Status Styling */
 /* --- Variables & Base --- */
 :root {
     --primary-color: #2979FF; /* Vivid Blue */
@@ -8,6 +8,7 @@
     --success-color: #4CAF50; /* Green */
     --success-hover-color: #388E3C;
     --danger-color: #f44336; /* Red for warnings/errors */
+    --warning-color: #FF9800; /* Orange for warnings */
     
     --light-bg: #F7F9FC; /* Very light grey for main background */
     --content-bg: #FFFFFF; /* White for content areas like filters */
@@ -81,6 +82,125 @@ body.is-loading {
 #map-loading-overlay-wrapper.visible {
     opacity: 1;
     visibility: visible;
+}
+
+/* NEW: Auto-Refresh Status Styling */
+.refresh-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: var(--border-radius-sm);
+    font-size: 0.75rem;
+}
+
+.refresh-indicator {
+    font-size: 0.8rem;
+    animation: pulse-refresh 2s ease-in-out infinite;
+}
+
+.refresh-indicator.online {
+    color: var(--success-color);
+}
+
+.refresh-indicator.warning {
+    color: var(--warning-color);
+}
+
+.refresh-indicator.offline {
+    color: var(--danger-color);
+}
+
+.refresh-text {
+    color: var(--text-light);
+    opacity: 0.9;
+    font-size: 0.7rem;
+}
+
+.refresh-button {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: var(--text-light);
+    padding: 0.2rem 0.4rem;
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+    font-size: 0.7rem;
+    transition: all 0.2s ease;
+    min-width: auto;
+    height: auto;
+    line-height: 1;
+}
+
+.refresh-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.refresh-button:active {
+    transform: rotate(180deg);
+}
+
+.refresh-button.refreshing {
+    animation: spin 1s linear infinite;
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+/* Data Freshness Details in Sidebar */
+.refresh-details {
+    background-color: var(--light-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    padding: 0.5rem;
+    margin-top: 0.25rem;
+}
+
+.refresh-detail-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+    font-size: 0.75rem;
+}
+
+.refresh-detail-item:last-child {
+    margin-bottom: 0;
+}
+
+.refresh-label {
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.refresh-value {
+    color: var(--text-dark);
+    font-weight: 600;
+    font-size: 0.7rem;
+}
+
+.refresh-value.fresh {
+    color: var(--success-color);
+}
+
+.refresh-value.stale {
+    color: var(--warning-color);
+}
+
+.refresh-value.error {
+    color: var(--danger-color);
+}
+
+/* Enhanced animations */
+@keyframes pulse-refresh {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
 }
 
 /* Enhanced styles for heatmap controls */
@@ -695,6 +815,11 @@ button:disabled,
         margin-left: 0;
         border-top: 1px solid var(--border-color);
         padding-top: 0.75rem;
+        margin-top: 0.75rem;
+    }
+    
+    .refresh-status {
+        justify-content: center;
         margin-top: 0.75rem;
     }
 }

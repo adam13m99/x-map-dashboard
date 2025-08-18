@@ -10,7 +10,7 @@ os.environ.setdefault('MALLOC_MMAP_MAX_', '65536')
 # Metabase connection details
 METABASE_URL = os.getenv("METABASE_URL", "https://metabase.ofood.cloud")
 METABASE_USERNAME = os.getenv("METABASE_USERNAME", "xmap@ofood.cloud")
-METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "METABASE_PASSWORD")
+METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "MrpD7vlTk468")
 
 # Metabase question IDs
 ORDER_DATA_QUESTION_ID = int(os.getenv("ORDER_DATA_QUESTION_ID", "5822"))
@@ -23,6 +23,14 @@ PAGE_SIZE = int(os.getenv("PAGE_SIZE", "50000"))  # REDUCED: Smaller page size f
 
 # Cache configuration - reduced for single worker
 CACHE_SIZE = int(os.getenv("CACHE_SIZE", "50"))  # REDUCED: Smaller cache for single worker
+
+# AUTO-REFRESH CONFIGURATION - NEW: Add auto-refresh settings
+ENABLE_AUTO_REFRESH = os.getenv("ENABLE_AUTO_REFRESH", "True").lower() in ("true", "1", "yes")
+VENDOR_REFRESH_INTERVAL_MINUTES = int(os.getenv("VENDOR_REFRESH_INTERVAL_MINUTES", "2"))
+ORDER_REFRESH_INTERVAL_MINUTES = int(os.getenv("ORDER_REFRESH_INTERVAL_MINUTES", "300"))  # Orders refresh less frequently
+REFRESH_ON_STARTUP_DELAY_SECONDS = int(os.getenv("REFRESH_ON_STARTUP_DELAY_SECONDS", "120"))  # Wait 2 minutes after startup
+AUTO_REFRESH_MAX_RETRIES = int(os.getenv("AUTO_REFRESH_MAX_RETRIES", "3"))
+AUTO_REFRESH_RETRY_DELAY_SECONDS = int(os.getenv("AUTO_REFRESH_RETRY_DELAY_SECONDS", "30"))
 
 # Memory optimization settings (can be overridden via environment)
 MEMORY_OPTIMIZATION = {
@@ -103,6 +111,16 @@ def print_config_summary():
     print(f"   Worker Temp Dir: {WORKER_TMP_DIR}")
     print(f"   Max Requests per Worker: {MAX_REQUESTS} (DEBUG: LOW FOR RECYCLING)")
     
+    # NEW: Print auto-refresh configuration
+    print(f"🔄 Auto-Refresh Configuration:")
+    print(f"   Auto-Refresh Enabled: {ENABLE_AUTO_REFRESH}")
+    if ENABLE_AUTO_REFRESH:
+        print(f"   Vendor Refresh Interval: {VENDOR_REFRESH_INTERVAL_MINUTES} minutes")
+        print(f"   Order Refresh Interval: {ORDER_REFRESH_INTERVAL_MINUTES} minutes")
+        print(f"   Startup Delay: {REFRESH_ON_STARTUP_DELAY_SECONDS} seconds")
+        print(f"   Max Retries: {AUTO_REFRESH_MAX_RETRIES}")
+        print(f"   Retry Delay: {AUTO_REFRESH_RETRY_DELAY_SECONDS} seconds")
+    
     if IS_CONTAINER:
         print(f"   Container Mode: DETECTED")
         if CONTAINER_MEMORY_LIMIT:
@@ -162,6 +180,15 @@ def validate_config():
     if WORKER_TMP_DIR.startswith('/tmp') and os.path.exists('/dev/shm'):
         issues.append("Using disk-based temp directory, consider using /dev/shm for better performance")
     
+    # NEW: Validate auto-refresh settings
+    if ENABLE_AUTO_REFRESH:
+        if VENDOR_REFRESH_INTERVAL_MINUTES < 1:
+            issues.append(f"Vendor refresh interval is {VENDOR_REFRESH_INTERVAL_MINUTES} minutes, should be at least 1")
+        if ORDER_REFRESH_INTERVAL_MINUTES < 5:
+            issues.append(f"Order refresh interval is {ORDER_REFRESH_INTERVAL_MINUTES} minutes, should be at least 5")
+        if AUTO_REFRESH_MAX_RETRIES < 1:
+            issues.append(f"Auto-refresh max retries is {AUTO_REFRESH_MAX_RETRIES}, should be at least 1")
+    
     if issues:
         print("⚠️  Configuration Issues Found:")
         for issue in issues:
@@ -189,6 +216,8 @@ print(f"🔧 Memory optimization applied: {MEMORY_OPTIMIZATION}")
 print(f"📊 Performance settings: Workers={WORKER_COUNT}, Cache={CACHE_SIZE}, PageSize={PAGE_SIZE}")
 print(f"🚀 Environment: {FLASK_ENV}, Debug={DEBUG}")
 print(f"⏱️  Timeouts: Request={REQUEST_TIMEOUT}s, Graceful={GRACEFUL_TIMEOUT}s")
+if ENABLE_AUTO_REFRESH:
+    print(f"🔄 Auto-Refresh: Enabled (Vendors: {VENDOR_REFRESH_INTERVAL_MINUTES}min, Orders: {ORDER_REFRESH_INTERVAL_MINUTES}min)")
 
 # ENVIRONMENT VARIABLE OVERRIDES - NEW: Document available overrides
 """
@@ -200,6 +229,14 @@ Core Settings:
 - REQUEST_TIMEOUT: Request timeout in seconds (default: 300)
 - PAGE_SIZE: Metabase page size (default: 50000)
 - CACHE_SIZE: Coverage cache size (default: 50)
+
+Auto-Refresh Settings:
+- ENABLE_AUTO_REFRESH: Enable automatic data refresh (default: True)
+- VENDOR_REFRESH_INTERVAL_MINUTES: Vendor refresh interval (default: 10)
+- ORDER_REFRESH_INTERVAL_MINUTES: Order refresh interval (default: 30)
+- REFRESH_ON_STARTUP_DELAY_SECONDS: Delay before first refresh (default: 120)
+- AUTO_REFRESH_MAX_RETRIES: Max retries on refresh failure (default: 3)
+- AUTO_REFRESH_RETRY_DELAY_SECONDS: Delay between retries (default: 30)
 
 Debug Settings:
 - DEBUG: Enable debug mode (default: True)
@@ -227,6 +264,7 @@ Container Settings:
 
 Examples:
 - DEBUG=True WORKER_COUNT=1 python run_production.py
+- ENABLE_AUTO_REFRESH=True VENDOR_REFRESH_INTERVAL_MINUTES=5 python run_production.py
 - REQUEST_TIMEOUT=600 LOG_LEVEL=INFO python run_production.py
 - CONTINUE_WITHOUT_DATA=True python run_production.py
 """

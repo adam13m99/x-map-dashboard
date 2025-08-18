@@ -117,12 +117,6 @@ body.is-loading {
     color: var(--text-light);
     opacity: 0.9;
     font-size: 0.7rem;
-    flex-grow: 1;
-}
-
-.refresh-buttons {
-    display: flex;
-    gap: 0.25rem;
 }
 
 .refresh-button {
@@ -145,51 +139,13 @@ body.is-loading {
 }
 
 .refresh-button:active {
-    transform: scale(0.95);
+    transform: rotate(180deg);
 }
 
 .refresh-button.refreshing {
     animation: spin 1s linear infinite;
     opacity: 0.7;
     pointer-events: none;
-}
-
-/* Individual refresh buttons in sidebar */
-.manual-refresh-controls {
-    margin-top: 0.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.btn-refresh-individual {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.25rem;
-    width: 100%;
-    font-size: 0.75rem;
-    padding: 0.4rem 0.5rem;
-    height: auto;
-}
-
-.btn-refresh-individual .btn-icon {
-    font-size: 0.8rem;
-}
-
-.btn-refresh-individual:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    pointer-events: none;
-}
-
-.btn-refresh-individual.refreshing {
-    opacity: 0.7;
-    position: relative;
-}
-
-.btn-refresh-individual.refreshing .btn-icon {
-    animation: spin 1s linear infinite;
 }
 
 /* Data Freshness Details in Sidebar */
@@ -234,11 +190,6 @@ body.is-loading {
 
 .refresh-value.error {
     color: var(--danger-color);
-}
-
-.refresh-value.refreshing {
-    color: var(--primary-color);
-    font-style: italic;
 }
 
 /* Enhanced animations */

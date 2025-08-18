@@ -17,11 +17,7 @@
             <div class="refresh-status" id="refresh-status">
                 <span class="refresh-indicator" id="refresh-indicator">●</span>
                 <span class="refresh-text" id="refresh-text">Checking data freshness...</span>
-                <div class="refresh-buttons">
-                    <button class="refresh-button" id="manual-refresh-vendors-btn" title="Refresh vendor data">🏪</button>
-                    <button class="refresh-button" id="manual-refresh-orders-btn" title="Refresh order data">📊</button>
-                    <button class="refresh-button" id="manual-refresh-both-btn" title="Refresh all data">🔄</button>
-                </div>
+                <button class="refresh-button" id="manual-refresh-btn" title="Manually refresh data">🔄</button>
             </div>
         </header>
         <div class="filters-top">
@@ -167,15 +163,7 @@ or one per line"></textarea>
                             <span class="refresh-value" id="refresh-count">V: 0, O: 0</span>
                         </div>
                     </div>
-                    <div class="manual-refresh-controls">
-                        <button id="refresh-vendors-btn" class="btn-secondary btn-refresh-individual" title="Refresh vendor data only">
-                            <span class="btn-icon">🏪</span> Refresh Vendors
-                        </button>
-                        <button id="refresh-orders-btn" class="btn-secondary btn-refresh-individual" title="Refresh order data only">
-                            <span class="btn-icon">📊</span> Refresh Orders
-                        </button>
-                        <button id="force-refresh-btn" class="btn-secondary" style="width: 100%; margin-top: 0.5rem;">🔄 Refresh All Data</button>
-                    </div>
+                    <button id="force-refresh-btn" class="btn-secondary" style="width: 100%; margin-top: 0.5rem;">Force Refresh All</button>
                 </div>
                 <hr>
                 <h4>Vendor Display</h4>

@@ -59,15 +59,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // NEW: Auto-refresh status elements
     const refreshIndicatorEl = document.getElementById('refresh-indicator');
     const refreshTextEl = document.getElementById('refresh-text');
-    const manualRefreshVendorsBtn = document.getElementById('manual-refresh-vendors-btn');
-    const manualRefreshOrdersBtn = document.getElementById('manual-refresh-orders-btn');
-    const manualRefreshBothBtn = document.getElementById('manual-refresh-both-btn');
+    const manualRefreshBtn = document.getElementById('manual-refresh-btn');
     const vendorRefreshStatusEl = document.getElementById('vendor-refresh-status');
     const orderRefreshStatusEl = document.getElementById('order-refresh-status');
     const refreshCountEl = document.getElementById('refresh-count');
     const forceRefreshBtn = document.getElementById('force-refresh-btn');
-    const refreshVendorsBtn = document.getElementById('refresh-vendors-btn');
-    const refreshOrdersBtn = document.getElementById('refresh-orders-btn');
     
     // Radius modifier elements
     const vendorRadiusModifierEl = document.getElementById('vendor-radius-modifier');
@@ -266,49 +262,14 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshCountEl.textContent = `V: ${status.vendor_refresh.refresh_count}, O: ${status.order_refresh.refresh_count}`;
     }
 
-    async function triggerManualRefresh(type = 'both', buttonElement = null) {
+    async function triggerManualRefresh(type = 'both') {
         try {
-            // Determine which button was clicked and update its state
-            let targetButton = buttonElement;
-            if (!targetButton) {
-                // Fallback to determine button based on type
-                if (type === 'vendor') {
-                    targetButton = refreshVendorsBtn || manualRefreshVendorsBtn;
-                } else if (type === 'order') {
-                    targetButton = refreshOrdersBtn || manualRefreshOrdersBtn;
-                } else {
-                    targetButton = forceRefreshBtn || manualRefreshBothBtn;
-                }
-            }
-
             // Show refreshing state
-            const originalText = targetButton.textContent;
-            const originalHTML = targetButton.innerHTML;
-            
-            // Update button state based on refresh type
-            if (type === 'vendor') {
-                targetButton.innerHTML = '<span class="btn-icon">🏪</span> Refreshing...';
-                targetButton.classList.add('refreshing');
-                // Update status display
-                vendorRefreshStatusEl.textContent = 'Refreshing...';
-                vendorRefreshStatusEl.className = 'refresh-value refreshing';
-            } else if (type === 'order') {
-                targetButton.innerHTML = '<span class="btn-icon">📊</span> Refreshing...';
-                targetButton.classList.add('refreshing');
-                // Update status display
-                orderRefreshStatusEl.textContent = 'Refreshing...';
-                orderRefreshStatusEl.className = 'refresh-value refreshing';
-            } else {
-                targetButton.textContent = 'Refreshing All...';
-                targetButton.classList.add('refreshing');
-                // Update both status displays
-                vendorRefreshStatusEl.textContent = 'Refreshing...';
-                vendorRefreshStatusEl.className = 'refresh-value refreshing';
-                orderRefreshStatusEl.textContent = 'Refreshing...';
-                orderRefreshStatusEl.className = 'refresh-value refreshing';
-            }
-            
-            targetButton.disabled = true;
+            const button = type === 'both' ? forceRefreshBtn : manualRefreshBtn;
+            const originalText = button.textContent;
+            button.textContent = 'Refreshing...';
+            button.classList.add('refreshing');
+            button.disabled = true;
 
             const response = await fetch(`${API_BASE_URL}/refresh-now`, {
                 method: 'POST',
@@ -324,63 +285,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const result = await response.json();
             
-            // Show success feedback
-            if (type === 'vendor' && result.results?.vendor_success) {
-                vendorRefreshStatusEl.textContent = 'Just refreshed';
-                vendorRefreshStatusEl.className = 'refresh-value fresh';
-            } else if (type === 'order' && result.results?.order_success) {
-                orderRefreshStatusEl.textContent = 'Just refreshed';
-                orderRefreshStatusEl.className = 'refresh-value fresh';
-            } else if (type === 'both') {
-                if (result.results?.vendor_success) {
-                    vendorRefreshStatusEl.textContent = 'Just refreshed';
-                    vendorRefreshStatusEl.className = 'refresh-value fresh';
-                }
-                if (result.results?.order_success) {
-                    orderRefreshStatusEl.textContent = 'Just refreshed';
-                    orderRefreshStatusEl.className = 'refresh-value fresh';
-                }
-            }
-            
-            // Update status immediately after a short delay
+            // Update status immediately
             setTimeout(() => {
                 fetchRefreshStatus().then(status => {
                     if (status) updateRefreshStatusUI(status);
                 });
             }, 1000);
 
-            console.log(`Manual ${type} refresh result:`, result);
+            console.log('Manual refresh result:', result);
             
             // Reset button state
             setTimeout(() => {
-                targetButton.innerHTML = originalHTML;
-                targetButton.classList.remove('refreshing');
-                targetButton.disabled = false;
+                button.textContent = originalText;
+                button.classList.remove('refreshing');
+                button.disabled = false;
             }, 2000);
 
             return result;
         } catch (error) {
-            console.error(`Manual ${type} refresh failed:`, error);
+            console.error('Manual refresh failed:', error);
             
-            // Reset button state on error and show error in status
-            if (buttonElement) {
-                const originalHTML = buttonElement.innerHTML;
-                setTimeout(() => {
-                    buttonElement.innerHTML = originalHTML;
-                    buttonElement.classList.remove('refreshing');
-                    buttonElement.disabled = false;
-                }, 1000);
-            }
-            
-            // Update status displays to show error
-            if (type === 'vendor' || type === 'both') {
-                vendorRefreshStatusEl.textContent = 'Refresh failed';
-                vendorRefreshStatusEl.className = 'refresh-value error';
-            }
-            if (type === 'order' || type === 'both') {
-                orderRefreshStatusEl.textContent = 'Refresh failed';
-                orderRefreshStatusEl.className = 'refresh-value error';
-            }
+            // Reset button state on error
+            const button = type === 'both' ? forceRefreshBtn : manualRefreshBtn;
+            button.textContent = button === forceRefreshBtn ? 'Force Refresh All' : '🔄';
+            button.classList.remove('refreshing');
+            button.disabled = false;
             
             return null;
         }

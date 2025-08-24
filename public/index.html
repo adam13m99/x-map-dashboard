@@ -160,30 +160,55 @@ or one per line"></textarea>
                         <option value="0">No</option>
                     </select>
                 </div>
+                <div class="filter-item">
+                    <label for="vendor-delivery-type">Delivery Type:</label>
+                    <select id="vendor-delivery-type">
+                        <option value="all">All Delivery Types</option>
+                        <option value="ofood_only">oFood Only</option>
+                        <option value="own_only">Own Delivery Only</option>
+                        <option value="both">Both oFood & Own</option>
+                    </select>
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Filter vendors by their available delivery methods
+                    </small>
+                </div>
                 <hr>
                 <h4>Vendor Display</h4>
                  <div class="filter-item">
                     <label for="vendor-radius-toggle">Vendor Radius:</label>
                     <button id="vendor-radius-toggle" class="btn-toggle">Hide Radius</button>
                 </div>
-                <!-- RADIUS MODIFIER CONTROLS -->
+                <!-- NEW: ENHANCED RADIUS MODIFIER CONTROLS WITH GRADE-BASED OPTION -->
                 <div class="filter-item">
                     <label for="radius-mode-selector">Radius Mode:</label>
                     <select id="radius-mode-selector">
                         <option value="percentage">Percentage</option>
                         <option value="fixed">Fixed Value</option>
+                        <option value="grade">Grade-based</option>
                     </select>
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Grade-based: A+ &gt;4km, A/A- =4km, B/B- =3.5km, C/C- =3km, D/D- =2km, E/E- =1.5km, F =1km
+                    </small>
                 </div>
                 <div class="filter-item" id="radius-percentage-control">
                     <label for="vendor-radius-modifier">Radius Modifier: <span id="radius-modifier-value">100</span>%</label>
                     <input type="range" id="vendor-radius-modifier" min="10" max="100" value="100" step="5">
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Adjusts all vendor radii by percentage of original values
+                    </small>
                 </div>
                 <div class="filter-item" id="radius-fixed-control" style="display: none;">
                     <label for="vendor-radius-fixed">Fixed Radius: <span id="radius-fixed-value">3</span> km</label>
                     <input type="range" id="vendor-radius-fixed" min="0.5" max="10" value="3" step="0.5">
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Sets the same radius for all vendors regardless of grade
+                    </small>
                 </div>
                 <div class="filter-item">
                     <button id="btn-reset-radius" class="btn-secondary" style="width: 100%;">Reset Radius</button>
+                    <small style="display: block; margin-top: 4px; color: var(--text-muted);">
+                        Resets to original radius values or switches back from grade mode
+                    </small>
                 </div>
                 <hr>
                 <div class="filter-item">
@@ -213,7 +238,8 @@ or one per line"></textarea>
                     <h4>Coverage Grid Controls (200m)</h4>
                     <div class="filter-item">
                         <small style="display: block; margin-bottom: 8px; color: var(--text-muted);">
-                            These controls only work when "Coverage Grid (200m)" is selected as Polygon Display Type above.
+                            These controls only work when "Coverage Grid (200m)" is selected as Polygon Display Type above. 
+                            <strong>NEW:</strong> Works in both Tehran and Mashhad with target-based analysis.
                         </small>
                     </div>
                     <div class="filter-item">

@@ -67,6 +67,24 @@ target_lookup_dict = {}    # --- MODIFIED: Will use area_id ---
 city_id_map = {1: "mashhad", 2: "tehran", 5: "shiraz"}
 city_name_to_id_map = {v: k for k, v in city_id_map.items()}
 
+# NEW: Grade-based radius mapping
+GRADE_RADIUS_MAPPING = {
+    'A+': 4.1,      # > 4km
+    'A': 4.0,       # = 4km
+    'A-': 4.0,      # = 4km
+    'B': 3.5,       # = 3.5km
+    'B-': 3.5,      # = 3.5km
+    'C': 3.0,       # = 3km
+    'C-': 3.0,      # = 3km
+    'D': 2.0,       # = 2km
+    'D-': 2.0,      # = 2km
+    'E': 1.5,       # = 1.5km
+    'E-': 1.5,      # = 1.5km
+    'F': 1.0,       # = 1km
+    'Not Enough Rate': 1.5,  # = 1.5km
+    'Ungraded': 1.5  # = 1.5km (default for missing grades)
+}
+
 # NEW: Thread safety for auto-refresh
 data_lock = threading.Lock()
 refresh_threads = {}
@@ -168,6 +186,39 @@ def optimize_dataframe_memory(df):
         print(f"   💾 Memory optimized: {original_memory:.1f}MB → {optimized_memory:.1f}MB (saved {saved_mb:.1f}MB)")
     
     return df
+
+def apply_grade_based_radius(df_vendors):
+    """
+    NEW: Apply grade-based radius to vendors based on their grades.
+    """
+    if df_vendors is None or df_vendors.empty:
+        return df_vendors
+    
+    df_copy = df_vendors.copy()
+    
+    # Ensure grade column exists
+    if 'grade' not in df_copy.columns:
+        print("Warning: No grade column found, cannot apply grade-based radius")
+        return df_copy
+    
+    # Apply grade-based radius mapping
+    def get_radius_for_grade(grade):
+        if pd.isna(grade) or grade is None:
+            return GRADE_RADIUS_MAPPING.get('Ungraded', 1.5)
+        grade_str = str(grade).strip()
+        return GRADE_RADIUS_MAPPING.get(grade_str, GRADE_RADIUS_MAPPING.get('Ungraded', 1.5))
+    
+    df_copy['radius'] = df_copy['grade'].apply(get_radius_for_grade)
+    
+    # Log the radius assignment statistics
+    radius_stats = df_copy.groupby('grade')['radius'].agg(['count', 'mean']).fillna(0)
+    print(f"📏 Grade-based radius applied:")
+    for grade, stats in radius_stats.iterrows():
+        count = int(stats['count'])
+        avg_radius = stats['mean']
+        print(f"   {grade}: {count} vendors → {avg_radius:.1f}km radius")
+    
+    return df_copy
 
 def load_tehran_shapefile(filename):
     shp_path = os.path.join(SRC_DIR, 'polygons', 'tehran_districts', filename)
@@ -769,7 +820,9 @@ def refresh_vendor_data():
                 'visible': 'float32',
                 'open': 'float32',
                 'radius': 'float32',
-                'business_line': 'category'
+                'business_line': 'category',
+                'ofood_delivery': 'int8',     # NEW: oFood delivery type
+                'own_delivery': 'int8'        # NEW: Own delivery type
             }
             
             existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
@@ -798,7 +851,7 @@ def refresh_vendor_data():
                     df_vendors_new['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors_new))
             
             # Handle missing columns and data types
-            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code']:
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
                 if col not in df_vendors_new.columns: 
                     df_vendors_new[col] = np.nan
                     
@@ -817,6 +870,12 @@ def refresh_vendor_data():
                 df_vendors_new['radius'] = safe_numeric_conversion(df_vendors_new['radius'])
             if 'vendor_code' in df_vendors_new.columns: 
                 df_vendors_new['vendor_code'] = df_vendors_new['vendor_code'].astype(str)
+            
+            # NEW: Handle delivery type columns
+            if 'ofood_delivery' in df_vendors_new.columns:
+                df_vendors_new['ofood_delivery'] = safe_numeric_conversion(df_vendors_new['ofood_delivery'], 0).astype('int8')
+            if 'own_delivery' in df_vendors_new.columns:
+                df_vendors_new['own_delivery'] = safe_numeric_conversion(df_vendors_new['own_delivery'], 0).astype('int8')
             
             # Store original radius for reset functionality
             if 'radius' in df_vendors_new.columns:
@@ -1078,7 +1137,9 @@ def load_data():
             'visible': 'float32',
             'open': 'float32',
             'radius': 'float32',
-            'business_line': 'category'  # ADDED: Ensure business_line is treated as category
+            'business_line': 'category',  # ADDED: Ensure business_line is treated as category
+            'ofood_delivery': 'int8',     # NEW: oFood delivery type
+            'own_delivery': 'int8'        # NEW: Own delivery type
         }
         
         print(f"🚀 Fetching LIVE vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
@@ -1130,7 +1191,7 @@ def load_data():
             
             # REMOVED: Don't override business_line from orders - use the one from vendors directly
             
-            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code']:
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
                 if col not in df_vendors.columns: df_vendors[col] = np.nan
                 
             # FIX: Proper NaN handling for numeric columns
@@ -1148,6 +1209,12 @@ def load_data():
                 df_vendors['radius'] = safe_numeric_conversion(df_vendors['radius'])
             if 'vendor_code' in df_vendors.columns: 
                 df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
+            
+            # NEW: Handle delivery type columns
+            if 'ofood_delivery' in df_vendors.columns:
+                df_vendors['ofood_delivery'] = safe_numeric_conversion(df_vendors['ofood_delivery'], 0).astype('int8')
+            if 'own_delivery' in df_vendors.columns:
+                df_vendors['own_delivery'] = safe_numeric_conversion(df_vendors['own_delivery'], 0).astype('int8')
             
             # Store original radius for reset functionality
             if 'radius' in df_vendors.columns:
@@ -1170,7 +1237,10 @@ def load_data():
     # 3. Polygon Data - Load in parallel if possible
     poly_start = time.time()
     marketing_areas_base = os.path.join(SRC_DIR, 'polygons', 'tapsifood_marketing_areas')
-    tehran_area_name_to_id_map = {}
+    
+    # NEW: Store area name-to-id mappings for both Tehran and Mashhad
+    city_area_name_to_id_maps = {}
+    
     for city_file_name in ['mashhad_polygons.csv', 'tehran_polygons.csv', 'shiraz_polygons.csv']:
         city_name_key = city_file_name.split('_')[0]
         file_path = os.path.join(marketing_areas_base, city_file_name)
@@ -1190,52 +1260,100 @@ def load_data():
             gdf = gpd.GeoDataFrame(df_poly, geometry='geometry', crs="EPSG:4326").dropna(subset=['geometry'])
             gdf_marketing_areas[city_name_key] = gdf
             
-            # If this is Tehran, create the name -> id map for the target CSV
-            if city_name_key == 'tehran':
-                tehran_area_name_to_id_map = gdf.set_index('name')['area_id'].to_dict()
-                print(f"DEBUG: Created Tehran area name-to-id map with {len(tehran_area_name_to_id_map)} entries.")
+            # Store the name -> id map for this city (for both Tehran and Mashhad)
+            city_area_name_to_id_maps[city_name_key] = gdf.set_index('name')['area_id'].to_dict()
+            print(f"DEBUG: Created {city_name_key} area name-to-id map with {len(city_area_name_to_id_maps[city_name_key])} entries.")
+            
             print(f"Marketing areas for {city_name_key} loaded: {len(gdf_marketing_areas[city_name_key])} polygons")
         except Exception as e:
             print(f"Error loading marketing areas for {city_name_key} from {file_path}: {e}")
             gdf_marketing_areas[city_name_key] = gpd.GeoDataFrame()
     
-    # --- NEW: Load and process tehran_coverage.csv ---
-    coverage_target_file = os.path.join(SRC_DIR, 'targets', 'tehran_coverage.csv')
+    # --- NEW: Load coverage targets for both Tehran and Mashhad ---
+    # Load Tehran coverage targets
+    tehran_coverage_target_file = os.path.join(SRC_DIR, 'targets', 'tehran_coverage.csv')
+    mashhad_coverage_target_file = os.path.join(SRC_DIR, 'targets', 'mashhad_coverage.csv')
+    
+    # Combined target lookup dictionary
+    target_lookup_dict = {}
+    
+    # Load Tehran targets
     try:
-        df_temp_targets = pd.read_csv(coverage_target_file, encoding='utf-8')
-        if 'marketing_area' in df_temp_targets.columns:
-            df_temp_targets['marketing_area'] = df_temp_targets['marketing_area'].str.strip()
+        df_temp_targets_tehran = pd.read_csv(tehran_coverage_target_file, encoding='utf-8')
+        if 'marketing_area' in df_temp_targets_tehran.columns:
+            df_temp_targets_tehran['marketing_area'] = df_temp_targets_tehran['marketing_area'].str.strip()
             
-            # --- NEW: Map area names to the newly created area_ids ---
-            df_temp_targets['area_id'] = df_temp_targets['marketing_area'].map(tehran_area_name_to_id_map)
-            
-            # --- DEBUG: Check for mismatches ---
-            unmapped_areas = df_temp_targets[df_temp_targets['area_id'].isna()]
-            if not unmapped_areas.empty:
-                print(f"!!! WARNING: Could not map {len(unmapped_areas['marketing_area'].unique())} areas from tehran_coverage.csv to polygon IDs.")
-                print(f"--- Mismatched Names: {unmapped_areas['marketing_area'].unique().tolist()}")
-            
-            df_temp_targets.dropna(subset=['area_id'], inplace=True) # Drop targets that can't be mapped
-            # Melt the dataframe to a long format
-            df_coverage_targets = df_temp_targets.melt(
-                id_vars=['area_id', 'marketing_area'], # keep both for reference
-                var_name='business_line',
-                value_name='target'
-            )
-            
-            # --- MODIFIED: Create a dictionary using area_id for robust, fast lookups ---
-            target_lookup_dict = df_coverage_targets.set_index(['area_id', 'business_line'])['target'].to_dict()
-            print(f"DEBUG: Tehran coverage target lookup created. Keys format: (area_id, business_line).")
-            print(f"--- Total mapped targets: {len(target_lookup_dict)}")
-            # Print a sample key-value pair for verification
-            if target_lookup_dict:
-                 print(f"--- Sample lookup entry: {next(iter(target_lookup_dict.items()))}")
+            # Map Tehran area names to area_ids
+            if 'tehran' in city_area_name_to_id_maps:
+                df_temp_targets_tehran['area_id'] = df_temp_targets_tehran['marketing_area'].map(city_area_name_to_id_maps['tehran'])
+                
+                # Check for mismatches
+                unmapped_areas = df_temp_targets_tehran[df_temp_targets_tehran['area_id'].isna()]
+                if not unmapped_areas.empty:
+                    print(f"!!! WARNING: Could not map {len(unmapped_areas['marketing_area'].unique())} Tehran areas from tehran_coverage.csv to polygon IDs.")
+                    print(f"--- Mismatched Names: {unmapped_areas['marketing_area'].unique().tolist()}")
+                
+                df_temp_targets_tehran.dropna(subset=['area_id'], inplace=True)
+                
+                # Melt to long format and add to lookup dict
+                df_coverage_targets_tehran = df_temp_targets_tehran.melt(
+                    id_vars=['area_id', 'marketing_area'],
+                    var_name='business_line',
+                    value_name='target'
+                )
+                
+                # Add Tehran targets to lookup dict
+                tehran_lookup = df_coverage_targets_tehran.set_index(['area_id', 'business_line'])['target'].to_dict()
+                target_lookup_dict.update(tehran_lookup)
+                
+                print(f"DEBUG: Tehran coverage targets loaded. Added {len(tehran_lookup)} target entries.")
         else:
-            print("Warning: 'marketing_area' column not found in tehran_coverage.csv. Targets not loaded.")
-            df_coverage_targets = pd.DataFrame()
+            print("Warning: 'marketing_area' column not found in tehran_coverage.csv.")
     except Exception as e:
         print(f"Error loading tehran_coverage.csv: {e}")
-        df_coverage_targets = pd.DataFrame()
+    
+    # NEW: Load Mashhad targets
+    try:
+        df_temp_targets_mashhad = pd.read_csv(mashhad_coverage_target_file, encoding='utf-8')
+        if 'marketing_area' in df_temp_targets_mashhad.columns:
+            df_temp_targets_mashhad['marketing_area'] = df_temp_targets_mashhad['marketing_area'].str.strip()
+            
+            # Map Mashhad area names to area_ids
+            if 'mashhad' in city_area_name_to_id_maps:
+                df_temp_targets_mashhad['area_id'] = df_temp_targets_mashhad['marketing_area'].map(city_area_name_to_id_maps['mashhad'])
+                
+                # Check for mismatches
+                unmapped_areas = df_temp_targets_mashhad[df_temp_targets_mashhad['area_id'].isna()]
+                if not unmapped_areas.empty:
+                    print(f"!!! WARNING: Could not map {len(unmapped_areas['marketing_area'].unique())} Mashhad areas from mashhad_coverage.csv to polygon IDs.")
+                    print(f"--- Mismatched Names: {unmapped_areas['marketing_area'].unique().tolist()}")
+                
+                df_temp_targets_mashhad.dropna(subset=['area_id'], inplace=True)
+                
+                # Melt to long format and add to lookup dict
+                df_coverage_targets_mashhad = df_temp_targets_mashhad.melt(
+                    id_vars=['area_id', 'marketing_area'],
+                    var_name='business_line',
+                    value_name='target'
+                )
+                
+                # Add Mashhad targets to lookup dict
+                mashhad_lookup = df_coverage_targets_mashhad.set_index(['area_id', 'business_line'])['target'].to_dict()
+                target_lookup_dict.update(mashhad_lookup)
+                
+                print(f"DEBUG: Mashhad coverage targets loaded. Added {len(mashhad_lookup)} target entries.")
+        else:
+            print("Warning: 'marketing_area' column not found in mashhad_coverage.csv.")
+    except Exception as e:
+        print(f"Info: mashhad_coverage.csv not found or could not be loaded: {e}")
+        print("This is expected if Mashhad coverage targets are not yet available.")
+    
+    print(f"DEBUG: Total coverage target lookup entries: {len(target_lookup_dict)}")
+    if target_lookup_dict:
+        # Print sample entries for verification
+        sample_keys = list(target_lookup_dict.keys())[:3]
+        for key in sample_keys:
+            print(f"--- Sample lookup entry: {key} -> {target_lookup_dict[key]}")
     
     gdf_tehran_region = load_tehran_shapefile('RegionTehran_WGS1984.shp')
     gdf_tehran_main_districts = load_tehran_shapefile('Tehran_WGS1984.shp')
@@ -1521,6 +1639,7 @@ def get_map_data():
         selected_vendor_grades = [g.strip() for g in request.args.getlist('vendor_grades') if g.strip()]
         vendor_visible_str = request.args.get('vendor_visible', default="any", type=str)
         vendor_is_open_str = request.args.get('vendor_is_open', default="any", type=str)
+        vendor_delivery_type_str = request.args.get('vendor_delivery_type', default="all", type=str)
         vendor_area_main_type = request.args.get('vendor_area_main_type', default="all", type=str)
         selected_vendor_area_sub_types = [s.strip() for s in request.args.getlist('vendor_area_sub_type') if s.strip()]
         heatmap_type_req = request.args.get('heatmap_type_request', default="none", type=str)
@@ -1530,7 +1649,7 @@ def get_map_data():
         # NEW: Get zoom level for adaptive heatmap processing
         zoom_level = request.args.get('zoom_level', default=11, type=float)
         
-        # Radius modifier parameters
+        # Radius modifier parameters - NEW: Handle grade-based radius mode
         radius_modifier = request.args.get('radius_modifier', default=1.0, type=float)
         radius_mode = request.args.get('radius_mode', default='percentage', type=str)
         radius_fixed = request.args.get('radius_fixed', default=3.0, type=float)
@@ -1538,6 +1657,8 @@ def get_map_data():
         # DEBUG: Print filter info
         print(f"DEBUG: Business line filter = {selected_business_lines}")
         print(f"DEBUG: Total vendors before filtering = {len(df_vendors_copy)}")
+        print(f"DEBUG: Radius mode = {radius_mode}")
+        print(f"DEBUG: Delivery type filter = {vendor_delivery_type_str}")
         
         heatmap_data = []
         vendor_markers = []
@@ -1554,12 +1675,16 @@ def get_map_data():
             print(f"Warning: Missing vendor columns: {missing_columns}")
             vendor_markers = []
         else:
-            # 1. Apply radius modifier based on mode - FIX: Handle NaN values properly
+            # 1. Apply radius modifier based on mode - NEW: Handle grade-based radius
             if 'radius' in df_v_filtered.columns and 'original_radius' in df_v_filtered.columns:
                 if radius_mode == 'fixed':
                     df_v_filtered['radius'] = radius_fixed
+                elif radius_mode == 'grade':
+                    # NEW: Apply grade-based radius
+                    print(f"DEBUG: Applying grade-based radius...")
+                    df_v_filtered = apply_grade_based_radius(df_v_filtered)
                 else:
-                    # Handle NaN values in original_radius
+                    # Handle NaN values in original_radius for percentage mode
                     df_v_filtered['radius'] = df_v_filtered['original_radius'].fillna(3.0) * radius_modifier
             
             # 2. Remove vendors with invalid coordinates
@@ -1616,6 +1741,31 @@ def get_map_data():
                 if vendor_is_open_str != "any" and 'open' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['open'] == int(vendor_is_open_str)]
                     print(f"DEBUG: Vendors after open filtering = {len(df_v_filtered)}")
+                
+                # NEW: Apply delivery type filter
+                if vendor_delivery_type_str != "all":
+                    if vendor_delivery_type_str == "ofood_only":
+                        # oFood only: ofood=1, own=0
+                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
+                            df_v_filtered = df_v_filtered[
+                                (df_v_filtered['ofood_delivery'] == 1) & 
+                                (df_v_filtered['own_delivery'] == 0)
+                            ]
+                    elif vendor_delivery_type_str == "own_only":
+                        # Own delivery only: ofood=0, own=1
+                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
+                            df_v_filtered = df_v_filtered[
+                                (df_v_filtered['ofood_delivery'] == 0) & 
+                                (df_v_filtered['own_delivery'] == 1)
+                            ]
+                    elif vendor_delivery_type_str == "both":
+                        # Both delivery types: ofood=1, own=1
+                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
+                            df_v_filtered = df_v_filtered[
+                                (df_v_filtered['ofood_delivery'] == 1) & 
+                                (df_v_filtered['own_delivery'] == 1)
+                            ]
+                    print(f"DEBUG: Vendors after delivery type filtering ({vendor_delivery_type_str}) = {len(df_v_filtered)}")
             
             if not df_v_filtered.empty:
                 # FIX: Clean data before converting to dict
@@ -1723,14 +1873,15 @@ def get_map_data():
                 point_area_info = find_marketing_area_for_points(grid_points, city_name)
                 coverage_results = calculate_coverage_for_grid_vectorized(grid_points, df_v_filtered, city_name)
                 
+                # NEW: Support for both Tehran and Mashhad target-based logic
                 use_target_based_logic = bool(
-                    city_name == "tehran" and
+                    city_name in ["tehran", "mashhad"] and
                     len(selected_business_lines) == 1 and
                     target_lookup_dict
                 )
                 selected_bl_for_target = selected_business_lines[0] if use_target_based_logic else None
                 
-                print(f"DEBUG: Coverage logic check: Target-based = {use_target_based_logic}")
+                print(f"DEBUG: Coverage logic check: Target-based = {use_target_based_logic} for {city_name}")
                 if use_target_based_logic:
                     print(f"--- Analyzing for Business Line: '{selected_bl_for_target}'")
                 

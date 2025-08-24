@@ -1,4 +1,4 @@
-// Enhanced script.js with integrated Auto-Refresh Timer System
+// Enhanced script.js with integrated Auto-Refresh Timer System and Grade-based Radius
 document.addEventListener('DOMContentLoaded', () => {
     let map;
     let vendorLayerGroup = L.featureGroup();
@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let initialFilterData = {};
     let lastHeatmapData = null;
     let currentRadiusModifier = 1.0;
-    let currentRadiusMode = 'percentage';
+    let currentRadiusMode = 'percentage'; // NEW: Can be 'percentage', 'fixed', or 'grade'
     let currentRadiusFixed = 3.0;
     let marketingAreasOnTop = false;
     
@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const vendorCodesFilterEl = document.getElementById('vendor-codes-filter');
     const vendorVisibleEl = document.getElementById('vendor-visible');
     const vendorIsOpenEl = document.getElementById('vendor-is-open');
+    const vendorDeliveryTypeEl = document.getElementById('vendor-delivery-type');
     const vendorRadiusToggleBtn = document.getElementById('vendor-radius-toggle');
     const radiusEdgeColorEl = document.getElementById('radius-edge-color');
     const radiusInnerColorEl = document.getElementById('radius-inner-color');
@@ -654,6 +655,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // NEW: Helper function to update radius mode UI
+    function updateRadiusModeUI() {
+        // Hide all controls first
+        radiusPercentageControl.style.display = 'none';
+        radiusFixedControl.style.display = 'none';
+        
+        // Show appropriate control based on mode
+        if (currentRadiusMode === 'fixed') {
+            radiusFixedControl.style.display = 'block';
+        } else if (currentRadiusMode === 'percentage') {
+            radiusPercentageControl.style.display = 'block';
+        }
+        // For 'grade' mode, we don't show either slider control
+        
+        // Update the modifier description
+        updateRadiusModifierDescription();
+    }
+
+    // NEW: Helper function to update radius modifier description
+    function updateRadiusModifierDescription() {
+        const resetBtn = btnResetRadius;
+        if (currentRadiusMode === 'grade') {
+            resetBtn.textContent = 'Reset to Original Radius';
+            resetBtn.title = 'Switch back to percentage-based radius';
+        } else {
+            resetBtn.textContent = 'Reset Radius';
+            resetBtn.title = 'Reset radius modifier to 100%';
+        }
+    }
+
     function setupEventListeners() {
         applyFiltersBtn.addEventListener('click', fetchAndDisplayMapData);
         cityEl.addEventListener('change', (e) => {
@@ -751,16 +782,10 @@ document.addEventListener('DOMContentLoaded', () => {
             redrawVendorRadii();
         });
         
-        // Radius modifier controls
+        // NEW: Enhanced radius mode controls with grade-based option
         radiusModeSelector.addEventListener('change', (e) => {
             currentRadiusMode = e.target.value;
-            if (currentRadiusMode === 'fixed') {
-                radiusPercentageControl.style.display = 'none';
-                radiusFixedControl.style.display = 'block';
-            } else {
-                radiusPercentageControl.style.display = 'block';
-                radiusFixedControl.style.display = 'none';
-            }
+            updateRadiusModeUI();
         });
         
         vendorRadiusModifierEl.addEventListener('input', (e) => {
@@ -775,7 +800,15 @@ document.addEventListener('DOMContentLoaded', () => {
             currentRadiusFixed = parseFloat(value);
         });
         
+        // NEW: Enhanced reset button to handle grade mode
         btnResetRadius.addEventListener('click', () => {
+            if (currentRadiusMode === 'grade') {
+                // Switch back to percentage mode when resetting from grade mode
+                radiusModeSelector.value = 'percentage';
+                currentRadiusMode = 'percentage';
+                updateRadiusModeUI();
+            }
+            
             vendorRadiusModifierEl.value = "100";
             radiusModifierValueEl.textContent = "100";
             currentRadiusModifier = 1.0;
@@ -908,10 +941,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedCity = cityEl.value;
         const selectedBLs = getSelectedValuesFromCustomDropdown(customFilterConfigs.businessLine);
 
-        if (isCoverageGrid && selectedCity === 'tehran') {
+        // NEW: Enhanced validation for coverage grid to support both Tehran and Mashhad
+        if (isCoverageGrid && ['tehran', 'mashhad'].includes(selectedCity)) {
             if (selectedBLs.length !== 1) {
                 showLoading(false);
-                alert('Target-based Coverage Analysis requires selecting exactly ONE Business Line.');
+                alert(`Target-based Coverage Analysis for ${selectedCity} requires selecting exactly ONE Business Line.`);
                 if(applyFiltersBtn) applyFiltersBtn.disabled = false;
                 return;
             }
@@ -943,10 +977,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         params.append('vendor_visible', vendorVisibleEl.value);
         params.append('vendor_is_open', vendorIsOpenEl.value);
+        params.append('vendor_delivery_type', vendorDeliveryTypeEl.value);
         params.append('heatmap_type_request', currentHeatmapType);
-        params.append('radius_modifier', currentRadiusModifier);
+        
+        // NEW: Enhanced radius parameters with grade support
         params.append('radius_mode', currentRadiusMode);
-        params.append('radius_fixed', currentRadiusFixed);
+        if (currentRadiusMode === 'fixed') {
+            params.append('radius_fixed', currentRadiusFixed);
+        } else if (currentRadiusMode === 'percentage') {
+            params.append('radius_modifier', currentRadiusModifier);
+        }
+        // For grade mode, we just pass the mode - backend will handle the grade-based logic
 
         console.log("Fetching map data with params:", params.toString());
         showLoading(true);
@@ -1252,13 +1293,37 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!allVendorsData || allVendorsData.length === 0) return;
         allVendorsData.forEach(vendor => {
             if (vendor.latitude == null || vendor.longitude == null) return; 
-            const popupContent = `<b>${vendor.vendor_name || 'N/A'}</b><br>
+            
+            // NEW: Enhanced popup content with grade-based radius info
+            let popupContent = `<b>${vendor.vendor_name || 'N/A'}</b><br>
                                 Code: ${vendor.vendor_code || 'N/A'}<br>
                                 Status: ${vendor.status_id !== null ? vendor.status_id : 'N/A'}<br>
                                 Grade: ${vendor.grade || 'N/A'}<br>
                                 Visible: ${vendor.visible == 1 ? 'Yes' : (vendor.visible == 0 ? 'No' : 'N/A')}<br>
-                                Open: ${vendor.open == 1 ? 'Yes' : (vendor.open == 0 ? 'No' : 'N/A')}<br>
-                                Radius: ${vendor.radius ? vendor.radius.toFixed(2) + ' km' : 'N/A'}`;
+                                Open: ${vendor.open == 1 ? 'Yes' : (vendor.open == 0 ? 'No' : 'N/A')}<br>`;
+            
+            // NEW: Show delivery type information
+            let deliveryTypes = [];
+            if (vendor.ofood_delivery == 1) deliveryTypes.push('oFood');
+            if (vendor.own_delivery == 1) deliveryTypes.push('Own');
+            const deliveryText = deliveryTypes.length > 0 ? deliveryTypes.join(' + ') : 'None';
+            popupContent += `Delivery: ${deliveryText}<br>`;
+            
+            // NEW: Show radius with mode information
+            if (vendor.radius) {
+                popupContent += `Radius: ${vendor.radius.toFixed(2)} km`;
+                if (currentRadiusMode === 'grade') {
+                    popupContent += ` <i>(grade-based)</i>`;
+                } else if (currentRadiusMode === 'fixed') {
+                    popupContent += ` <i>(fixed)</i>`;
+                } else {
+                    popupContent += ` <i>(${Math.round(currentRadiusModifier * 100)}%)</i>`;
+                }
+                popupContent += `<br>`;
+            } else {
+                popupContent += `Radius: N/A<br>`;
+            }
+            
             const marker = L.marker([vendor.latitude, vendor.longitude], {icon: defaultVendorIcon})
                 .bindPopup(popupContent);
             vendorLayerGroup.addLayer(marker);
@@ -1367,4 +1432,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize the application
     init();
+    
+    // NEW: Initialize radius mode UI after DOM is ready
+    document.addEventListener('DOMContentLoaded', () => {
+        updateRadiusModeUI();
+    });
 });

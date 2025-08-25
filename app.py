@@ -260,6 +260,7 @@ def load_snappfood_vendors():
         }
         
         df_sf = pd.read_csv(SF_VENDORS_CSV_PATH, dtype=sf_vendor_dtype)
+        df_sf['business_line'] = df_sf['business_line'].astype('string')
         df_sf = optimize_dataframe_memory(df_sf)
         
         # Add platform identifier and city name mapping
@@ -2017,8 +2018,10 @@ def get_map_data():
             
             # 4. EARLY BUSINESS LINE FILTERING - Apply this before area filtering
             if selected_business_lines and 'business_line' in df_v_filtered.columns:
-                print(f"DEBUG: Available business lines in vendors: {sorted(df_v_filtered['business_line'].unique())}")
-                df_v_filtered = df_v_filtered[df_v_filtered['business_line'].isin(selected_business_lines)]
+                bl_series = df_v_filtered['business_line']
+                bl_display = sorted(map(str, bl_series.dropna().unique()))
+                print(f"DEBUG: Available business lines in vendors: {bl_display}")
+                df_v_filtered = df_v_filtered[bl_series.astype(str).isin(selected_business_lines)]
                 print(f"DEBUG: Vendors after business line filtering = {len(df_v_filtered)}")
             
             # 5. Filter by specific vendor codes

@@ -1,4 +1,4 @@
-// Enhanced script.js with integrated Auto-Refresh Timer System and Grade-based Radius
+// Enhanced script.js with Multi-Platform Vendor Support and Auto-Refresh Timer System
 document.addEventListener('DOMContentLoaded', () => {
     let map;
     let vendorLayerGroup = L.featureGroup();
@@ -15,9 +15,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let initialFilterData = {};
     let lastHeatmapData = null;
     let currentRadiusModifier = 1.0;
-    let currentRadiusMode = 'percentage'; // NEW: Can be 'percentage', 'fixed', or 'grade'
+    let currentRadiusMode = 'percentage'; // Can be 'percentage', 'fixed', or 'grade'
     let currentRadiusFixed = 3.0;
     let marketingAreasOnTop = false;
+    
+    // NEW: Multi-platform vendor management
+    let currentVendorMapType = 'tapsifood_only';
+    let vendorMapTypeOptions = [];
     
     // Heatmap management variables
     let currentZoomLevel = 11;
@@ -42,7 +46,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const vendorCodesFilterEl = document.getElementById('vendor-codes-filter');
     const vendorVisibleEl = document.getElementById('vendor-visible');
     const vendorIsOpenEl = document.getElementById('vendor-is-open');
-    const vendorDeliveryTypeEl = document.getElementById('vendor-delivery-type');
     const vendorRadiusToggleBtn = document.getElementById('vendor-radius-toggle');
     const radiusEdgeColorEl = document.getElementById('radius-edge-color');
     const radiusInnerColorEl = document.getElementById('radius-inner-color');
@@ -52,6 +55,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const areaFillColorEl = document.getElementById('area-fill-color');
     const areaFillNoneEl = document.getElementById('area-fill-none');
     const applyFiltersBtn = document.getElementById('apply-filters-btn');
+    
+    // NEW: Multi-platform vendor elements
+    const vendorMapTypeEl = document.getElementById('vendor-map-type');
+    const isExpressFilterEl = document.getElementById('is-express');
+    const isExpressFilterContainer = document.getElementById('is-express-filter-container');
+    const isDualFilterEl = document.getElementById('is-dual');
+    const isDualFilterContainer = document.getElementById('is-dual-filter-container');
+    const isOwnDeliveryEl = document.getElementById('is-own-delivery');
+    const isOfoodDeliveryEl = document.getElementById('is-ofood-delivery');
+    const deliveryFiltersContainer = document.getElementById('delivery-filters-container');
     
     // Radius modifier elements
     const vendorRadiusModifierEl = document.getElementById('vendor-radius-modifier');
@@ -279,10 +292,299 @@ document.addEventListener('DOMContentLoaded', () => {
         if(vendorsAreVisible) redrawVendorMarkersAndRadii();
     }
 
+    // NEW: Multi-platform vendor helper functions
+    function populateVendorMapTypeOptions() {
+        if (!initialFilterData || !initialFilterData.vendor_map_type_options) return;
+        
+        vendorMapTypeOptions = initialFilterData.vendor_map_type_options;
+        vendorMapTypeEl.innerHTML = '';
+        
+        vendorMapTypeOptions.forEach(option => {
+            const optionEl = document.createElement('option');
+            optionEl.value = option.value;
+            optionEl.textContent = option.name;
+            if (option.default) {
+                optionEl.selected = true;
+                currentVendorMapType = option.value;
+            }
+            vendorMapTypeEl.appendChild(optionEl);
+        });
+        
+        console.log('Vendor map type options populated:', vendorMapTypeOptions.length);
+    }
+
+    function updatePlatformSpecificFilters() {
+        const selectedType = vendorMapTypeEl.value;
+        console.log('Updating platform-specific filters for type:', selectedType);
+        
+        // Reset all filters visibility first
+        isExpressFilterContainer.style.display = 'none';
+        isDualFilterContainer.style.display = 'none';
+        deliveryFiltersContainer.style.display = 'none';
+        
+        switch(selectedType) {
+            case 'tapsifood_only':
+                // Show: own_delivery, ofood_delivery, is_dual
+                // Hide: is_express
+                isDualFilterContainer.style.display = 'block';
+                deliveryFiltersContainer.style.display = 'block';
+                isExpressFilterContainer.style.display = 'none';
+                
+                // Update tooltips for this mode
+                updateFilterTooltips('tapsifood_only');
+                break;
+                
+            case 'all_snappfood':
+            case 'snappfood_exclude_tapsifood':
+                // Show: is_dual, is_express
+                // Hide: own_delivery, ofood_delivery
+                isDualFilterContainer.style.display = 'block';
+                isExpressFilterContainer.style.display = 'block';
+                deliveryFiltersContainer.style.display = 'none';
+                
+                // Update tooltips for Snappfood modes
+                updateFilterTooltips('snappfood_only');
+                break;
+                
+            case 'combined_no_overlap':
+                // Show: is_dual, is_express, own_delivery, ofood_delivery
+                // All filters are relevant - complex interaction logic applies
+                isDualFilterContainer.style.display = 'block';
+                isExpressFilterContainer.style.display = 'block';
+                deliveryFiltersContainer.style.display = 'block';
+                
+                // Update tooltips for combined mode
+                updateFilterTooltips('combined');
+                break;
+                
+            default:
+                // Fallback - show dual only
+                isDualFilterContainer.style.display = 'block';
+                updateFilterTooltips('default');
+                break;
+        }
+        
+        console.log('Platform filters updated for', selectedType, ':', {
+            dual: isDualFilterContainer.style.display !== 'none',
+            express: isExpressFilterContainer.style.display !== 'none',
+            delivery: deliveryFiltersContainer.style.display !== 'none'
+        });
+    }
+
+    function updateFilterTooltips(mode) {
+        // Update tooltips and descriptions based on the current mode
+        const expressEl = isExpressFilterEl;
+        const dualEl = isDualFilterEl;
+        const ownDeliveryEl = isOwnDeliveryEl;
+        const ofoodDeliveryEl = isOfoodDeliveryEl;
+        
+        switch(mode) {
+            case 'tapsifood_only':
+                if (dualEl) {
+                    dualEl.title = 'Filter by vendors present on both Tapsifood and Snappfood platforms';
+                }
+                if (ownDeliveryEl) {
+                    ownDeliveryEl.title = 'Filter Tapsifood vendors by own delivery capability';
+                }
+                if (ofoodDeliveryEl) {
+                    ofoodDeliveryEl.title = 'Filter Tapsifood vendors by oFood delivery availability';
+                }
+                break;
+                
+            case 'snappfood_only':
+                if (dualEl) {
+                    dualEl.title = 'Filter by vendors present on both platforms vs Snappfood-only';
+                }
+                if (expressEl) {
+                    expressEl.title = 'Filter Snappfood vendors by express delivery capability';
+                }
+                break;
+                
+            case 'combined':
+                if (dualEl) {
+                    dualEl.title = 'Filter by dual-platform vendors vs single-platform vendors';
+                }
+                if (expressEl) {
+                    expressEl.title = 'Filter express delivery (affects Snappfood + dual vendors)';
+                }
+                if (ownDeliveryEl) {
+                    ownDeliveryEl.title = 'Filter own delivery (affects Tapsifood + dual vendors)';
+                }
+                if (ofoodDeliveryEl) {
+                    ofoodDeliveryEl.title = 'Filter oFood delivery (affects Tapsifood + dual vendors)';
+                }
+                break;
+                
+            default:
+                if (dualEl) {
+                    dualEl.title = 'Filter by dual-platform status';
+                }
+                break;
+        }
+    }
+
+    function getVendorMapTypeDescription(type) {
+        const option = vendorMapTypeOptions.find(opt => opt.value === type);
+        return option ? option.description : type;
+    }
+
+    function addFilterExplanationHelper() {
+        // Create a small info box that explains current filter behavior
+        const infoBox = document.createElement('div');
+        infoBox.id = 'filter-explanation-box';
+        infoBox.style.cssText = `
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.95));
+            border: 1px solid var(--primary-color);
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 0.7rem;
+            line-height: 1.4;
+            color: var(--text-dark);
+            max-width: 280px;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 3px 12px rgba(41, 121, 255, 0.15), 0 1px 3px rgba(0,0,0,0.1);
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease-in-out;
+        `;
+        
+        // Add a close button
+        const closeBtn = document.createElement('button');
+        closeBtn.innerHTML = '×';
+        closeBtn.style.cssText = `
+            position: absolute;
+            top: 4px;
+            right: 6px;
+            background: none;
+            border: none;
+            font-size: 14px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 2px;
+        `;
+        
+        closeBtn.addEventListener('click', () => {
+            infoBox.style.display = 'none';
+        });
+        
+        closeBtn.addEventListener('mouseover', () => {
+            closeBtn.style.backgroundColor = 'var(--light-bg)';
+            closeBtn.style.color = 'var(--danger-color)';
+        });
+        
+        closeBtn.addEventListener('mouseout', () => {
+            closeBtn.style.backgroundColor = 'transparent';
+            closeBtn.style.color = 'var(--text-muted)';
+        });
+        
+        infoBox.appendChild(closeBtn);
+        
+        // Create content area
+        const contentDiv = document.createElement('div');
+        contentDiv.id = 'filter-explanation-content';
+        contentDiv.style.paddingRight = '18px'; // Make room for close button
+        infoBox.appendChild(contentDiv);
+        
+        // Add to sidebar
+        const sidebar = document.querySelector('.sidebar-filters');
+        if (sidebar) {
+            sidebar.style.position = 'relative';
+            sidebar.appendChild(infoBox);
+        }
+        
+        // Function to update explanation text
+        function updateFilterExplanation() {
+            const currentType = vendorMapTypeEl.value;
+            const expressValue = isExpressFilterEl.value;
+            const dualValue = isDualFilterEl.value;
+            const ownDeliveryValue = isOwnDeliveryEl.value;
+            const ofoodDeliveryValue = isOfoodDeliveryEl.value;
+            
+            let explanation = '';
+            let showExplanation = false;
+            
+            switch(currentType) {
+                case 'tapsifood_only':
+                    if (dualValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all') {
+                        explanation = `<b>Tapsifood Only Mode:</b><br>`;
+                        if (dualValue === '1') explanation += '• Showing only dual-platform vendors<br>';
+                        if (dualValue === '0') explanation += '• Showing only single-platform vendors<br>';
+                        if (ownDeliveryValue !== 'all') explanation += `• Own delivery: ${ownDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
+                        if (ofoodDeliveryValue !== 'all') explanation += `• oFood delivery: ${ofoodDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
+                        showExplanation = true;
+                    }
+                    break;
+                    
+                case 'all_snappfood':
+                case 'snappfood_exclude_tapsifood':
+                    if (dualValue !== 'all' || expressValue !== 'all') {
+                        explanation = `<b>${currentType === 'all_snappfood' ? 'All Snappfood' : 'Snappfood Exclude Tapsifood'} Mode:</b><br>`;
+                        if (dualValue === '1') explanation += '• Showing only dual-platform vendors<br>';
+                        if (dualValue === '0') explanation += '• Showing only single-platform vendors<br>';
+                        if (expressValue !== 'all') explanation += `• Express delivery: ${expressValue === '1' ? 'Yes' : 'No'}<br>`;
+                        showExplanation = true;
+                    }
+                    break;
+                    
+                case 'combined_no_overlap':
+                    if (dualValue !== 'all' || expressValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all') {
+                        explanation = `<b>Combined Mode - Complex Filtering:</b><br>`;
+                        if (dualValue === '1') {
+                            explanation += '• Dual vendors: Affected by ALL delivery filters<br>';
+                        } else if (dualValue === '0') {
+                            explanation += '• Single-platform vendors only<br>';
+                        } else {
+                            explanation += '• Mixed vendors: Different filters apply to different platforms<br>';
+                        }
+                        
+                        if (expressValue !== 'all') {
+                            explanation += `• Express (Snappfood + dual): ${expressValue === '1' ? 'Yes' : 'No'}<br>`;
+                        }
+                        if (ownDeliveryValue !== 'all') {
+                            explanation += `• Own delivery (Tapsifood + dual): ${ownDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
+                        }
+                        if (ofoodDeliveryValue !== 'all') {
+                            explanation += `• oFood delivery (Tapsifood + dual): ${ofoodDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
+                        }
+                        showExplanation = true;
+                    }
+                    break;
+            }
+            
+            if (showExplanation) {
+                contentDiv.innerHTML = explanation;
+                infoBox.style.display = 'block';
+            } else {
+                infoBox.style.display = 'none';
+            }
+        }
+        
+        // Add event listeners to update explanation when filters change
+        vendorMapTypeEl.addEventListener('change', updateFilterExplanation);
+        if (isExpressFilterEl) isExpressFilterEl.addEventListener('change', updateFilterExplanation);
+        if (isDualFilterEl) isDualFilterEl.addEventListener('change', updateFilterExplanation);
+        if (isOwnDeliveryEl) isOwnDeliveryEl.addEventListener('change', updateFilterExplanation);
+        if (isOfoodDeliveryEl) isOfoodDeliveryEl.addEventListener('change', updateFilterExplanation);
+        
+        // Initial update
+        setTimeout(updateFilterExplanation, 500);
+    }
+
     function init() {
         initMap();
         fetchInitialFilterData().then(() => {
             populateCitySelect();
+            populateVendorMapTypeOptions(); // NEW: Populate vendor map type options
             initializeCustomDropdowns();
             applyDefaultFilters(); 
             setupEventListeners();
@@ -328,6 +630,12 @@ document.addEventListener('DOMContentLoaded', () => {
             
             btnToggleVendors.textContent = vendorsAreVisible ? 'Vendors On' : 'Vendors Off';
             btnToggleVendors.classList.toggle('active', vendorsAreVisible);
+            
+            // NEW: Initialize platform-specific filters
+            updatePlatformSpecificFilters();
+            
+            // Add filter explanation helper
+            addFilterExplanationHelper();
             
             fetchAndDisplayMapData();
         }).catch(error => {
@@ -409,6 +717,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showLoading(true, `Backend error (settings): ${initialFilterData.error}. Please refresh.`);
                  throw new Error(`Backend error (initial data): ${initialFilterData.error} - ${initialFilterData.details || ''}`);
             }
+            console.log('Initial filter data loaded:', initialFilterData);
         } catch (error) {
             console.error("Failed to fetch initial filter data:", error);
             showLoading(true, `Failed to load settings: ${error.message}. Please refresh.`);
@@ -655,7 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // NEW: Helper function to update radius mode UI
+    // Helper function to update radius mode UI
     function updateRadiusModeUI() {
         // Hide all controls first
         radiusPercentageControl.style.display = 'none';
@@ -673,7 +982,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateRadiusModifierDescription();
     }
 
-    // NEW: Helper function to update radius modifier description
+    // Helper function to update radius modifier description
     function updateRadiusModifierDescription() {
         const resetBtn = btnResetRadius;
         if (currentRadiusMode === 'grade') {
@@ -695,6 +1004,21 @@ document.addEventListener('DOMContentLoaded', () => {
             updateAreaSubTypeCustomFilter();
         });
         vendorAreaMainTypeEl.addEventListener('change', updateVendorAreaSubTypeFilter);
+        
+        // NEW: Multi-platform vendor map type change handler
+        vendorMapTypeEl.addEventListener('change', (e) => {
+            currentVendorMapType = e.target.value;
+            console.log('Vendor map type changed to:', currentVendorMapType);
+            updatePlatformSpecificFilters();
+            
+            // Update filter explanation helper
+            const explanationUpdateEvent = new Event('change');
+            setTimeout(() => {
+                if (isExpressFilterEl) isExpressFilterEl.dispatchEvent(explanationUpdateEvent);
+            }, 100);
+            
+            // Don't auto-fetch here - let user click Apply Filters button
+        });
         
         // Lat/Lng finder
         btnFindLocation.addEventListener('click', () => {
@@ -782,7 +1106,7 @@ document.addEventListener('DOMContentLoaded', () => {
             redrawVendorRadii();
         });
         
-        // NEW: Enhanced radius mode controls with grade-based option
+        // Enhanced radius mode controls with grade-based option
         radiusModeSelector.addEventListener('change', (e) => {
             currentRadiusMode = e.target.value;
             updateRadiusModeUI();
@@ -800,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentRadiusFixed = parseFloat(value);
         });
         
-        // NEW: Enhanced reset button to handle grade mode
+        // Enhanced reset button to handle grade mode
         btnResetRadius.addEventListener('click', () => {
             if (currentRadiusMode === 'grade') {
                 // Switch back to percentage mode when resetting from grade mode
@@ -928,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Enhanced fetchAndDisplayMapData function with zoom level parameter
+    // Enhanced fetchAndDisplayMapData function with multi-platform support
     async function fetchAndDisplayMapData() {
         // Clear the temporary marker on new search
         if (tempLocationMarker) {
@@ -941,7 +1265,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedCity = cityEl.value;
         const selectedBLs = getSelectedValuesFromCustomDropdown(customFilterConfigs.businessLine);
 
-        // NEW: Enhanced validation for coverage grid to support both Tehran and Mashhad
+        // Enhanced validation for coverage grid to support both Tehran and Mashhad
         if (isCoverageGrid && ['tehran', 'mashhad'].includes(selectedCity)) {
             if (selectedBLs.length !== 1) {
                 showLoading(false);
@@ -977,10 +1301,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         params.append('vendor_visible', vendorVisibleEl.value);
         params.append('vendor_is_open', vendorIsOpenEl.value);
-        params.append('vendor_delivery_type', vendorDeliveryTypeEl.value);
         params.append('heatmap_type_request', currentHeatmapType);
         
-        // NEW: Enhanced radius parameters with grade support
+        // NEW: Multi-platform vendor parameters
+        params.append('vendor_map_type', currentVendorMapType);
+        if (isExpressFilterEl.value !== 'all') {
+            params.append('is_express', isExpressFilterEl.value);
+        }
+        if (isDualFilterEl.value !== 'all') {
+            params.append('is_dual', isDualFilterEl.value);
+        }
+        if (isOwnDeliveryEl.value !== 'all') {
+            params.append('is_own_delivery', isOwnDeliveryEl.value);
+        }
+        if (isOfoodDeliveryEl.value !== 'all') {
+            params.append('is_ofood_delivery', isOfoodDeliveryEl.value);
+        }
+        
+        // Enhanced radius parameters with grade support
         params.append('radius_mode', currentRadiusMode);
         if (currentRadiusMode === 'fixed') {
             params.append('radius_fixed', currentRadiusFixed);
@@ -989,7 +1327,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         // For grade mode, we just pass the mode - backend will handle the grade-based logic
 
-        console.log("Fetching map data with params:", params.toString());
+        console.log("Fetching multi-platform map data with params:", params.toString());
         showLoading(true);
 
         try {
@@ -1005,6 +1343,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 showLoading(true, `Backend error: ${data.error}. Check console.`);
                 throw new Error(`Backend error: ${data.error} - ${data.details || ''}`);
             }
+
+            // Log multi-platform response data
+            console.log('Multi-platform response received:', {
+                vendors: data.vendors?.length || 0,
+                heatmapPoints: data.heatmap_data?.length || 0,
+                vendorMapType: data.vendor_map_type || 'unknown',
+                vendorSources: data.vendor_sources || [],
+                dataFreshness: data.data_freshness
+            });
 
             allVendorsData = data.vendors || [];
             allPolygonsData = data.polygons || null;
@@ -1023,7 +1370,7 @@ document.addEventListener('DOMContentLoaded', () => {
             updateMapLayers();
             showLoading(false);
         } catch (error) {
-            console.error("Fetch/Display Error:", error);
+            console.error("Multi-platform Fetch/Display Error:", error);
             if (!bodyEl.classList.contains('is-loading') || globalLoadingOverlayEl.textContent === 'LOADING ...') {
                 showLoading(true, `Error: ${error.message}. Check console or try refreshing.`);
             }
@@ -1294,22 +1641,35 @@ document.addEventListener('DOMContentLoaded', () => {
         allVendorsData.forEach(vendor => {
             if (vendor.latitude == null || vendor.longitude == null) return; 
             
-            // NEW: Enhanced popup content with grade-based radius info
+            // Enhanced popup content with multi-platform information
             let popupContent = `<b>${vendor.vendor_name || 'N/A'}</b><br>
                                 Code: ${vendor.vendor_code || 'N/A'}<br>
+                                Platform: ${vendor.vendor_source ? vendor.vendor_source.toUpperCase() : 'N/A'}<br>
                                 Status: ${vendor.status_id !== null ? vendor.status_id : 'N/A'}<br>
                                 Grade: ${vendor.grade || 'N/A'}<br>
                                 Visible: ${vendor.visible == 1 ? 'Yes' : (vendor.visible == 0 ? 'No' : 'N/A')}<br>
                                 Open: ${vendor.open == 1 ? 'Yes' : (vendor.open == 0 ? 'No' : 'N/A')}<br>`;
             
-            // NEW: Show delivery type information
-            let deliveryTypes = [];
-            if (vendor.ofood_delivery == 1) deliveryTypes.push('oFood');
-            if (vendor.own_delivery == 1) deliveryTypes.push('Own');
-            const deliveryText = deliveryTypes.length > 0 ? deliveryTypes.join(' + ') : 'None';
-            popupContent += `Delivery: ${deliveryText}<br>`;
+            // Add dual platform information
+            if (vendor.is_dual !== undefined) {
+                popupContent += `Dual Platform: ${vendor.is_dual == 1 ? 'Yes' : 'No'}<br>`;
+            }
             
-            // NEW: Show radius with mode information
+            // Add Snappfood-specific information
+            if (vendor.vendor_source === 'snappfood' && vendor.is_express !== undefined) {
+                popupContent += `Express Delivery: ${vendor.is_express == 1 ? 'Yes' : 'No'}<br>`;
+            }
+            
+            // Add Tapsifood delivery type information
+            if (vendor.vendor_source === 'tapsifood') {
+                let deliveryTypes = [];
+                if (vendor.ofood_delivery == 1) deliveryTypes.push('oFood');
+                if (vendor.own_delivery == 1) deliveryTypes.push('Own');
+                const deliveryText = deliveryTypes.length > 0 ? deliveryTypes.join(' + ') : 'None';
+                popupContent += `Delivery: ${deliveryText}<br>`;
+            }
+            
+            // Show radius with mode information
             if (vendor.radius) {
                 popupContent += `Radius: ${vendor.radius.toFixed(2)} km`;
                 if (currentRadiusMode === 'grade') {
@@ -1324,8 +1684,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 popupContent += `Radius: N/A<br>`;
             }
             
-            const marker = L.marker([vendor.latitude, vendor.longitude], {icon: defaultVendorIcon})
-                .bindPopup(popupContent);
+            // Create platform-specific markers with different colors
+            let markerColor = vendor.vendor_source === 'snappfood' ? '#FF6B35' : '#2979FF'; // Orange for Snappfood, Blue for Tapsifood
+            if (vendor.is_dual == 1) {
+                markerColor = '#9C27B0'; // Purple for dual vendors
+            }
+            
+            // Use different marker styles based on platform
+            let marker;
+            if (vendor.vendor_source === 'snappfood') {
+                // Different icon for Snappfood vendors
+                const snappfoodIcon = L.divIcon({
+                    className: 'snappfood-marker',
+                    html: `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+                    iconSize: [16, 16],
+                    iconAnchor: [8, 8]
+                });
+                marker = L.marker([vendor.latitude, vendor.longitude], {icon: snappfoodIcon});
+            } else {
+                // Use default icon for Tapsifood vendors
+                marker = L.marker([vendor.latitude, vendor.longitude], {icon: defaultVendorIcon});
+            }
+            
+            marker.bindPopup(popupContent);
             vendorLayerGroup.addLayer(marker);
         });
         redrawVendorRadii(); 
@@ -1396,12 +1777,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     // Filter-Based Data Section (applies to all polygon types)
                     if (p.vendor_count != null || p.unique_user_count != null) {
-                        popupContent += `<br><hr style="margin: 5px 0; border-color: #eee;"><em>Metrics (based on filters):</em>`;
+                        popupContent += `<br><hr style="margin: 5px 0; border-color: #eee;"><em>Metrics (${currentVendorMapType}):</em>`;
                         
                         // Vendor Metrics
                         if (p.vendor_count != null) {
                              popupContent += `<br><b>Total Filtered Vendors:</b> ${p.vendor_count}`;
                         }
+                        
+                        // Add platform source breakdown
+                        if (p.source_counts && Object.keys(p.source_counts).length > 0) {
+                            popupContent += `<br><b>- By Platform:</b> `;
+                            const sourceStrings = Object.entries(p.source_counts)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([source, count]) => `${source}: ${count}`);
+                            popupContent += sourceStrings.join(', ');
+                        }
+                        
                         if (p.grade_counts && Object.keys(p.grade_counts).length > 0) {
                             popupContent += `<br><b>- By Grade:</b> `;
                             const gradeStrings = Object.entries(p.grade_counts)
@@ -1433,7 +1824,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize the application
     init();
     
-    // NEW: Initialize radius mode UI after DOM is ready
+    // Initialize radius mode UI after DOM is ready
     document.addEventListener('DOMContentLoaded', () => {
         updateRadiusModeUI();
     });

@@ -10,7 +10,7 @@ os.environ.setdefault('MALLOC_MMAP_MAX_', '65536')
 # Metabase connection details
 METABASE_URL = os.getenv("METABASE_URL", "https://metabase.ofood.cloud")
 METABASE_USERNAME = os.getenv("METABASE_USERNAME", "xmap@ofood.cloud")
-METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "METABASE_PASSWORD")
+METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "MrpD7vlTk468")
 
 # Metabase question IDs
 ORDER_DATA_QUESTION_ID = int(os.getenv("ORDER_DATA_QUESTION_ID", "5822"))
@@ -98,6 +98,43 @@ USE_SENDFILE = os.getenv("USE_SENDFILE", "False").lower() in ("true", "1", "yes"
 IS_CONTAINER = os.path.exists('/.dockerenv') or os.getenv('IS_CONTAINER', 'False').lower() in ('true', '1', 'yes')
 CONTAINER_MEMORY_LIMIT = os.getenv('CONTAINER_MEMORY_LIMIT', None)  # Container memory limit if known
 
+# NEW: MULTI-PLATFORM VENDOR DATA PATHS
+# Snappfood vendor data path
+SF_VENDORS_CSV_PATH = os.getenv("SF_VENDORS_CSV_PATH", "src/vendor/sf_vendors.csv")
+
+# Enhanced graded data path (now includes dual vendor mapping)
+GRADED_CSV_PATH = os.getenv("GRADED_CSV_PATH", "src/vendor/graded.csv")
+
+# VENDOR MAP TYPE SETTINGS - NEW: Configuration for vendor display modes
+DEFAULT_VENDOR_MAP_TYPE = os.getenv("DEFAULT_VENDOR_MAP_TYPE", "tapsifood_only")
+
+VENDOR_MAP_TYPES = {
+    "tapsifood_only": {
+        "name": "Tapsifood Only",
+        "description": "Show only Tapsifood vendors from Metabase",
+        "sources": ["metabase"],
+        "default": True
+    },
+    "all_snappfood": {
+        "name": "All Snappfood Vendors", 
+        "description": "Show all Snappfood vendors from CSV",
+        "sources": ["snappfood"],
+        "default": False
+    },
+    "snappfood_exclude_tapsifood": {
+        "name": "Snappfood Exclude Tapsifood",
+        "description": "Show Snappfood vendors not in Tapsifood",
+        "sources": ["snappfood_only"], 
+        "default": False
+    },
+    "combined_no_overlap": {
+        "name": "Tapsifood + Snappfood Exclude Tapsifood",
+        "description": "Show Tapsifood + unique Snappfood vendors",
+        "sources": ["metabase", "snappfood_only"],
+        "default": False
+    }
+}
+
 # DEBUGGING HELPERS - NEW: Add debugging utilities
 def print_config_summary():
     """Print a summary of current configuration for debugging"""
@@ -110,6 +147,16 @@ def print_config_summary():
     print(f"   Log Level: {LOG_LEVEL}")
     print(f"   Worker Temp Dir: {WORKER_TMP_DIR}")
     print(f"   Max Requests per Worker: {MAX_REQUESTS} (DEBUG: LOW FOR RECYCLING)")
+    
+    # NEW: Print multi-platform vendor configuration
+    print(f"🏪 Multi-Platform Vendor Configuration:")
+    print(f"   Snappfood CSV: {SF_VENDORS_CSV_PATH}")
+    print(f"   Enhanced Graded CSV: {GRADED_CSV_PATH}")
+    print(f"   Default Vendor Map Type: {DEFAULT_VENDOR_MAP_TYPE}")
+    print(f"   Available Vendor Types: {len(VENDOR_MAP_TYPES)}")
+    for vmt_key, vmt_config in VENDOR_MAP_TYPES.items():
+        status = "(DEFAULT)" if vmt_config.get("default") else ""
+        print(f"     • {vmt_config['name']} {status}")
     
     # NEW: Print auto-refresh configuration
     print(f"🔄 Auto-Refresh Configuration:")
@@ -189,6 +236,16 @@ def validate_config():
         if AUTO_REFRESH_MAX_RETRIES < 1:
             issues.append(f"Auto-refresh max retries is {AUTO_REFRESH_MAX_RETRIES}, should be at least 1")
     
+    # NEW: Validate multi-platform vendor settings
+    if not os.path.exists(SF_VENDORS_CSV_PATH):
+        issues.append(f"Snappfood vendors CSV not found: {SF_VENDORS_CSV_PATH}")
+    
+    if not os.path.exists(GRADED_CSV_PATH):
+        issues.append(f"Graded vendors CSV not found: {GRADED_CSV_PATH}")
+    
+    if DEFAULT_VENDOR_MAP_TYPE not in VENDOR_MAP_TYPES:
+        issues.append(f"Invalid default vendor map type: {DEFAULT_VENDOR_MAP_TYPE}")
+    
     if issues:
         print("⚠️  Configuration Issues Found:")
         for issue in issues:
@@ -204,8 +261,8 @@ if __name__ != "__main__":
     pass
 else:
     # When run directly, show full configuration details
-    print("🔧 MAP DASHBOARD CONFIGURATION (DEBUG MODE)")
-    print("=" * 50)
+    print("🔧 MAP DASHBOARD CONFIGURATION (MULTI-PLATFORM + DEBUG MODE)")
+    print("=" * 60)
     print_config_summary()
     print()
     check_memory_optimization()
@@ -216,6 +273,7 @@ print(f"🔧 Memory optimization applied: {MEMORY_OPTIMIZATION}")
 print(f"📊 Performance settings: Workers={WORKER_COUNT}, Cache={CACHE_SIZE}, PageSize={PAGE_SIZE}")
 print(f"🚀 Environment: {FLASK_ENV}, Debug={DEBUG}")
 print(f"⏱️  Timeouts: Request={REQUEST_TIMEOUT}s, Graceful={GRACEFUL_TIMEOUT}s")
+print(f"🏪 Multi-Platform: Tapsifood + Snappfood support enabled")
 if ENABLE_AUTO_REFRESH:
     print(f"🔄 Auto-Refresh: Enabled (Vendors: {VENDOR_REFRESH_INTERVAL_MINUTES}min, Orders: {ORDER_REFRESH_INTERVAL_MINUTES}min)")
 
@@ -229,6 +287,11 @@ Core Settings:
 - REQUEST_TIMEOUT: Request timeout in seconds (default: 300)
 - PAGE_SIZE: Metabase page size (default: 50000)
 - CACHE_SIZE: Coverage cache size (default: 50)
+
+Multi-Platform Vendor Settings:
+- SF_VENDORS_CSV_PATH: Path to Snappfood vendors CSV (default: src/vendor/sf_vendors.csv)
+- GRADED_CSV_PATH: Path to enhanced graded CSV (default: src/vendor/graded.csv)
+- DEFAULT_VENDOR_MAP_TYPE: Default vendor display mode (default: tapsifood_only)
 
 Auto-Refresh Settings:
 - ENABLE_AUTO_REFRESH: Enable automatic data refresh (default: True)
@@ -264,6 +327,8 @@ Container Settings:
 
 Examples:
 - DEBUG=True WORKER_COUNT=1 python run_production.py
+- DEFAULT_VENDOR_MAP_TYPE=all_snappfood python run_production.py
+- SF_VENDORS_CSV_PATH=/custom/path/sf_vendors.csv python run_production.py
 - ENABLE_AUTO_REFRESH=True VENDOR_REFRESH_INTERVAL_MINUTES=5 python run_production.py
 - REQUEST_TIMEOUT=600 LOG_LEVEL=INFO python run_production.py
 - CONTINUE_WITHOUT_DATA=True python run_production.py

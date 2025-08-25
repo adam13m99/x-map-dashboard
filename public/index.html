@@ -112,6 +112,71 @@ or one per line"></textarea>
                 <div id="map-loading-overlay-wrapper" class="visible">LOADING ...</div>
             </div>
             <aside class="sidebar-filters">
+                <!-- NEW: Multi-Platform Vendor Map Type Filter -->
+                <h4>🏪 Multi-Platform Vendor Controls</h4>
+                <div class="filter-item">
+                    <label for="vendor-map-type">Vendor Map Type:</label>
+                    <select id="vendor-map-type">
+                        <!-- Options populated by JS -->
+                    </select>
+                    <small style="display: block; margin-top: 4px; color: var(--text-muted);">
+                        Choose which vendor platform(s) to display on the map
+                    </small>
+                </div>
+                
+                <!-- NEW: Platform-specific filters with conditional visibility -->
+                <div class="filter-item" id="is-express-filter-container" style="display: none;">
+                    <label for="is-express">Express (Snappfood):</label>
+                    <select id="is-express">
+                        <option value="all">All</option>
+                        <option value="1">Express Only</option>
+                        <option value="0">Non-Express Only</option>
+                    </select>
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Filter Snappfood vendors by express delivery availability
+                    </small>
+                </div>
+                
+                <div class="filter-item" id="is-dual-filter-container">
+                    <label for="is-dual">Dual Platform:</label>
+                    <select id="is-dual">
+                        <option value="all">All Vendors</option>
+                        <option value="1">Dual Only (Both Platforms)</option>
+                        <option value="0">Single Platform Only</option>
+                    </select>
+                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
+                        Filter by vendors present on both platforms vs single platform
+                    </small>
+                </div>
+                
+                <!-- NEW: Enhanced delivery type filters (platform-specific) -->
+                <div class="filter-item" id="delivery-filters-container">
+                    <label>Delivery Types (Tapsifood):</label>
+                    <div class="delivery-type-controls">
+                        <div class="delivery-sub-filter">
+                            <label for="is-own-delivery" class="delivery-label">Own Delivery:</label>
+                            <select id="is-own-delivery" class="delivery-select">
+                                <option value="all">All</option>
+                                <option value="1">Has Own Delivery</option>
+                                <option value="0">No Own Delivery</option>
+                            </select>
+                        </div>
+                        <div class="delivery-sub-filter">
+                            <label for="is-ofood-delivery" class="delivery-label">oFood Delivery:</label>
+                            <select id="is-ofood-delivery" class="delivery-select">
+                                <option value="all">All</option>
+                                <option value="1">Has oFood Delivery</option>
+                                <option value="0">No oFood Delivery</option>
+                            </select>
+                        </div>
+                    </div>
+                    <small style="display: block; margin-top: 4px; color: var(--text-muted);">
+                        Filter Tapsifood vendors by their available delivery methods
+                    </small>
+                </div>
+                
+                <hr>
+                
                 <h4>Vendor Filters</h4>
                 <div class="filter-item">
                     <label for="vendor-area-main-type">Vendor Spatial Filter:</label>
@@ -159,18 +224,6 @@ or one per line"></textarea>
                         <option value="1">Yes</option>
                         <option value="0">No</option>
                     </select>
-                </div>
-                <div class="filter-item">
-                    <label for="vendor-delivery-type">Delivery Type:</label>
-                    <select id="vendor-delivery-type">
-                        <option value="all">All Delivery Types</option>
-                        <option value="ofood_only">oFood Only</option>
-                        <option value="own_only">Own Delivery Only</option>
-                        <option value="both">Both oFood & Own</option>
-                    </select>
-                    <small style="display: block; margin-top: 2px; color: var(--text-muted);">
-                        Filter vendors by their available delivery methods
-                    </small>
                 </div>
                 <hr>
                 <h4>Vendor Display</h4>
@@ -315,7 +368,7 @@ or one per line"></textarea>
             </aside>
         </div>
         <footer class="footer">
-            <p>TAPSI FOOD MAP DASHBOARD</p>
+            <p>TAPSI FOOD MAP DASHBOARD - MULTI-PLATFORM EDITION</p>
         </footer>
     </div>
     <button id="apply-filters-btn" class="btn-primary btn-apply-fixed">Apply All Filters</button>

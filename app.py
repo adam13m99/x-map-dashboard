@@ -30,7 +30,12 @@ from config import (
     PAGE_SIZE,
     CACHE_SIZE,
     city_boundaries,
-    # NEW: Auto-refresh configuration
+    # NEW: Multi-platform vendor settings
+    SF_VENDORS_CSV_PATH,
+    GRADED_CSV_PATH,
+    DEFAULT_VENDOR_MAP_TYPE,
+    VENDOR_MAP_TYPES,
+    # AUTO-refresh configuration
     ENABLE_AUTO_REFRESH,
     VENDOR_REFRESH_INTERVAL_MINUTES,
     ORDER_REFRESH_INTERVAL_MINUTES,
@@ -58,7 +63,13 @@ app.config['JSON_SORT_KEYS'] = False  # Don't sort JSON keys for slightly faster
 
 # --- Global Data Variables ---
 df_orders = None
-df_vendors = None
+# NEW: Multi-platform vendor data structures
+df_vendors_tapsifood = None  # Metabase vendors (original)
+df_vendors_snappfood = None  # sf_vendors.csv 
+df_graded_enhanced = None    # Enhanced graded.csv with dual mapping
+df_vendors_unified = None    # Currently active vendor dataset
+current_vendor_map_type = DEFAULT_VENDOR_MAP_TYPE  # Track current vendor display mode
+
 gdf_marketing_areas = {}
 gdf_tehran_region = None
 gdf_tehran_main_districts = None
@@ -219,6 +230,249 @@ def apply_grade_based_radius(df_vendors):
         print(f"   {grade}: {count} vendors → {avg_radius:.1f}km radius")
     
     return df_copy
+
+# NEW: Multi-platform vendor processing functions
+
+def load_snappfood_vendors():
+    """
+    Load Snappfood vendors from sf_vendors.csv
+    """
+    print(f"📊 Loading Snappfood vendors from {SF_VENDORS_CSV_PATH}...")
+    
+    try:
+        if not os.path.exists(SF_VENDORS_CSV_PATH):
+            print(f"❌ Snappfood vendors file not found: {SF_VENDORS_CSV_PATH}")
+            return pd.DataFrame()
+        
+        # Load CSV with optimized dtypes
+        sf_vendor_dtype = {
+            'vendor_code': 'str',
+            'vendor_name': 'str', 
+            'city_id': 'Int64',
+            'business_line': 'category',
+            'latitude': 'float32',
+            'longitude': 'float32',
+            'is_express': 'int8',
+            'status_id': 'Int64',
+            'radius': 'int32',  # Will be set to 0, grade-based will apply
+            'visible': 'int8',
+            'open': 'int8'
+        }
+        
+        df_sf = pd.read_csv(SF_VENDORS_CSV_PATH, dtype=sf_vendor_dtype)
+        df_sf = optimize_dataframe_memory(df_sf)
+        
+        # Add platform identifier and city name mapping
+        df_sf['vendor_source'] = 'snappfood'
+        df_sf['city_name'] = df_sf['city_id'].map(city_id_map).astype('category')
+        
+        # Initialize columns for compatibility with Tapsifood structure
+        df_sf['ofood_delivery'] = 0  # Snappfood vendors don't have oFood delivery
+        df_sf['own_delivery'] = 1    # Assume all Snappfood vendors have own delivery
+        
+        print(f"✅ Snappfood vendors loaded: {len(df_sf)} vendors")
+        
+        # Log city distribution
+        city_dist = df_sf['city_name'].value_counts()
+        for city, count in city_dist.items():
+            print(f"   📍 {city}: {count:,} vendors")
+            
+        return df_sf
+        
+    except Exception as e:
+        print(f"❌ Error loading Snappfood vendors: {e}")
+        return pd.DataFrame()
+
+def load_enhanced_graded_data():
+    """
+    Load enhanced graded.csv with dual vendor mapping
+    """
+    print(f"📊 Loading enhanced graded data from {GRADED_CSV_PATH}...")
+    
+    try:
+        if not os.path.exists(GRADED_CSV_PATH):
+            print(f"❌ Enhanced graded file not found: {GRADED_CSV_PATH}")
+            return pd.DataFrame()
+        
+        # Load enhanced graded CSV
+        graded_dtype = {
+            'sf_vendor_code': 'str',
+            'sf_vendor_name': 'str',
+            'city_id': 'Int64',
+            'business_line': 'category',
+            'grade': 'category',
+            'is_dual': 'int8',
+            'tf_vendor_code': 'str',  # Nullable for non-dual vendors
+            'tf_vendor_nam': 'str'    # Nullable for non-dual vendors  
+        }
+        
+        df_graded = pd.read_csv(GRADED_CSV_PATH, dtype=graded_dtype)
+        df_graded = optimize_dataframe_memory(df_graded)
+        
+        # Log dual vendor statistics
+        total_vendors = len(df_graded)
+        dual_vendors = len(df_graded[df_graded['is_dual'] == 1])
+        snappfood_only = total_vendors - dual_vendors
+        
+        print(f"✅ Enhanced graded data loaded: {total_vendors:,} total vendors")
+        print(f"   🔗 Dual vendors (both platforms): {dual_vendors:,}")
+        print(f"   📱 Snappfood only: {snappfood_only:,}")
+        
+        # Log grade distribution
+        grade_dist = df_graded['grade'].value_counts().head(10)
+        print(f"   📊 Top grades: {grade_dist.to_dict()}")
+        
+        return df_graded
+        
+    except Exception as e:
+        print(f"❌ Error loading enhanced graded data: {e}")
+        return pd.DataFrame()
+
+def create_unified_vendor_dataset(vendor_map_type="tapsifood_only"):
+    """
+    Create unified vendor dataset based on the specified vendor map type
+    """
+    global df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced
+    
+    print(f"🔄 Creating unified vendor dataset for type: {vendor_map_type}")
+    
+    if vendor_map_type == "tapsifood_only":
+        return create_tapsifood_only_dataset()
+    elif vendor_map_type == "all_snappfood":
+        return create_all_snappfood_dataset()
+    elif vendor_map_type == "snappfood_exclude_tapsifood":
+        return create_snappfood_exclude_tapsifood_dataset()
+    elif vendor_map_type == "combined_no_overlap":
+        return create_combined_no_overlap_dataset()
+    else:
+        print(f"❌ Unknown vendor map type: {vendor_map_type}, falling back to tapsifood_only")
+        return create_tapsifood_only_dataset()
+
+def create_tapsifood_only_dataset():
+    """
+    Create Tapsifood-only vendor dataset (original behavior)
+    """
+    global df_vendors_tapsifood, df_graded_enhanced
+    
+    if df_vendors_tapsifood is None or df_vendors_tapsifood.empty:
+        print("❌ No Tapsifood vendor data available")
+        return pd.DataFrame()
+    
+    df_result = df_vendors_tapsifood.copy()
+    
+    # Apply grading using enhanced graded data
+    if df_graded_enhanced is not None and not df_graded_enhanced.empty:
+        # Create mapping from tf_vendor_code to grade for dual vendors
+        dual_mapping = df_graded_enhanced[df_graded_enhanced['is_dual'] == 1].set_index('tf_vendor_code')['grade'].to_dict()
+        
+        # Apply grades
+        df_result['grade'] = df_result['vendor_code'].map(dual_mapping).fillna('Ungraded').astype('category')
+        
+        # Add is_dual information 
+        df_result['is_dual'] = df_result['vendor_code'].map(
+            df_graded_enhanced[df_graded_enhanced['is_dual'] == 1].set_index('tf_vendor_code')['is_dual'].to_dict()
+        ).fillna(0).astype('int8')
+        
+        matched_vendors = len(df_result[df_result['grade'] != 'Ungraded'])
+        print(f"   ✅ Tapsifood vendors: {len(df_result):,} total, {matched_vendors:,} graded")
+    else:
+        df_result['grade'] = pd.Categorical(['Ungraded'] * len(df_result))
+        df_result['is_dual'] = 0
+    
+    # Add platform identifier
+    df_result['vendor_source'] = 'tapsifood'
+    
+    # Initialize Snappfood-specific fields for compatibility
+    df_result['is_express'] = 0  # Tapsifood vendors don't have express
+    
+    return df_result
+
+def create_all_snappfood_dataset():
+    """
+    Create dataset with all Snappfood vendors
+    """
+    global df_vendors_snappfood, df_graded_enhanced
+    
+    if df_vendors_snappfood is None or df_vendors_snappfood.empty:
+        print("❌ No Snappfood vendor data available")
+        return pd.DataFrame()
+    
+    df_result = df_vendors_snappfood.copy()
+    
+    # Apply grading using enhanced graded data
+    if df_graded_enhanced is not None and not df_graded_enhanced.empty:
+        # Create mapping from sf_vendor_code to grade and is_dual
+        grade_mapping = df_graded_enhanced.set_index('sf_vendor_code')['grade'].to_dict()
+        dual_mapping = df_graded_enhanced.set_index('sf_vendor_code')['is_dual'].to_dict()
+        
+        # Apply mappings
+        df_result['grade'] = df_result['vendor_code'].map(grade_mapping).fillna('Ungraded').astype('category') 
+        df_result['is_dual'] = df_result['vendor_code'].map(dual_mapping).fillna(0).astype('int8')
+        
+        graded_vendors = len(df_result[df_result['grade'] != 'Ungraded'])
+        dual_vendors = len(df_result[df_result['is_dual'] == 1])
+        print(f"   ✅ All Snappfood vendors: {len(df_result):,} total, {graded_vendors:,} graded, {dual_vendors:,} dual")
+    else:
+        df_result['grade'] = pd.Categorical(['Ungraded'] * len(df_result))
+        df_result['is_dual'] = 0
+    
+    return df_result
+
+def create_snappfood_exclude_tapsifood_dataset():
+    """
+    Create dataset with Snappfood vendors excluding those in Tapsifood
+    """
+    global df_vendors_snappfood, df_graded_enhanced
+    
+    if df_vendors_snappfood is None or df_vendors_snappfood.empty:
+        print("❌ No Snappfood vendor data available")
+        return pd.DataFrame()
+    
+    df_result = df_vendors_snappfood.copy()
+    
+    # Apply grading first
+    if df_graded_enhanced is not None and not df_graded_enhanced.empty:
+        grade_mapping = df_graded_enhanced.set_index('sf_vendor_code')['grade'].to_dict()
+        dual_mapping = df_graded_enhanced.set_index('sf_vendor_code')['is_dual'].to_dict()
+        
+        df_result['grade'] = df_result['vendor_code'].map(grade_mapping).fillna('Ungraded').astype('category')
+        df_result['is_dual'] = df_result['vendor_code'].map(dual_mapping).fillna(0).astype('int8')
+        
+        # Filter out dual vendors (exclude Tapsifood)
+        df_result = df_result[df_result['is_dual'] == 0].copy()
+        
+        print(f"   ✅ Snappfood exclude Tapsifood: {len(df_result):,} vendors")
+    else:
+        df_result['grade'] = pd.Categorical(['Ungraded'] * len(df_result))
+        df_result['is_dual'] = 0
+    
+    return df_result
+
+def create_combined_no_overlap_dataset():
+    """
+    Create combined dataset: Tapsifood + Snappfood (excluding dual vendors)
+    """
+    df_tapsifood = create_tapsifood_only_dataset()
+    df_snappfood_only = create_snappfood_exclude_tapsifood_dataset()
+    
+    if df_tapsifood.empty and df_snappfood_only.empty:
+        print("❌ No vendor data available for combined dataset")
+        return pd.DataFrame()
+    
+    # Combine datasets
+    if not df_tapsifood.empty and not df_snappfood_only.empty:
+        df_combined = pd.concat([df_tapsifood, df_snappfood_only], ignore_index=True)
+    elif not df_tapsifood.empty:
+        df_combined = df_tapsifood.copy()
+    else:
+        df_combined = df_snappfood_only.copy()
+    
+    print(f"   ✅ Combined dataset: {len(df_combined):,} vendors")
+    if not df_tapsifood.empty and not df_snappfood_only.empty:
+        print(f"      📱 Tapsifood: {len(df_tapsifood):,}")
+        print(f"      📱 Snappfood only: {len(df_snappfood_only):,}")
+    
+    return df_combined
 
 def load_tehran_shapefile(filename):
     shp_path = os.path.join(SRC_DIR, 'polygons', 'tehran_districts', filename)
@@ -790,18 +1044,17 @@ def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
 # Enhanced refresh functions with better timing tracking
 def refresh_vendor_data():
     """Enhanced vendor data refresh with precise timing tracking"""
-    global df_vendors, refresh_stats
+    global df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced, df_vendors_unified, current_vendor_map_type, refresh_stats
     
-    logger.info("🔄 Starting vendor data refresh...")
+    logger.info("🔄 Starting multi-platform vendor data refresh...")
     
-    graded_file = os.path.join(SRC_DIR, 'vendor', 'graded.csv')
     retry_count = 0
     refresh_start_time = datetime.now()
     
     while retry_count < AUTO_REFRESH_MAX_RETRIES:
         try:
-            # Fetch fresh vendor data
-            logger.info(f"🚀 Fetching LIVE vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
+            # Fetch fresh Tapsifood vendor data
+            logger.info(f"🚀 Fetching LIVE Tapsifood vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
             df_vendors_raw = fetch_question_data(
                 question_id=VENDOR_DATA_QUESTION_ID,
                 metabase_url=METABASE_URL,
@@ -810,9 +1063,9 @@ def refresh_vendor_data():
             )
             
             if df_vendors_raw is None or df_vendors_raw.empty:
-                raise Exception("No vendor data received from Metabase")
+                raise Exception("No Tapsifood vendor data received from Metabase")
             
-            # Process the data (same logic as in load_data)
+            # Process the Tapsifood data (same logic as in load_data)
             vendor_dtype = {
                 'city_id': 'Int64',
                 'vendor_code': 'str',
@@ -829,66 +1082,50 @@ def refresh_vendor_data():
             df_vendors_raw = df_vendors_raw.astype(existing_vendor_dtypes)
             df_vendors_raw = optimize_dataframe_memory(df_vendors_raw)
             df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
-            df_vendors_new = df_vendors_raw.copy()
+            df_vendors_new_tapsifood = df_vendors_raw.copy()
             
-            # Load graded data
-            try:
-                df_graded_data = pd.read_csv(graded_file, dtype={'vendor_code': 'str', 'grade': 'category'})
-                if 'vendor_code' in df_vendors_new.columns and 'vendor_code' in df_graded_data.columns:
-                    df_vendors_new['vendor_code'] = df_vendors_new['vendor_code'].astype(str)
-                    df_graded_data['vendor_code'] = df_graded_data['vendor_code'].astype(str)
-                    df_vendors_new = pd.merge(df_vendors_new, df_graded_data[['vendor_code', 'grade']], on='vendor_code', how='left')
-                    if 'grade' in df_vendors_new.columns and isinstance(df_vendors_new['grade'].dtype, pd.CategoricalDtype):
-                        df_vendors_new['grade'] = df_vendors_new['grade'].cat.add_categories(['Ungraded'])
-                    df_vendors_new['grade'] = df_vendors_new['grade'].fillna('Ungraded').astype('category')
-                    logger.info(f"Grades loaded and merged. Found {df_vendors_new['grade'].notna().sum()} graded vendors.")
-                else:
-                    if 'grade' not in df_vendors_new.columns: 
-                        df_vendors_new['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors_new))
-            except Exception as eg:
-                logger.warning(f"Error loading or merging graded.csv: {eg}. Proceeding without grades.")
-                if 'grade' not in df_vendors_new.columns: 
-                    df_vendors_new['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors_new))
-            
-            # Handle missing columns and data types
+            # Handle missing columns and data types (same as in load_data)
             for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
-                if col not in df_vendors_new.columns: 
-                    df_vendors_new[col] = np.nan
+                if col not in df_vendors_new_tapsifood.columns: 
+                    df_vendors_new_tapsifood[col] = np.nan
                     
             # Fix NaN handling for numeric columns
-            if 'visible' in df_vendors_new.columns: 
-                df_vendors_new['visible'] = safe_numeric_conversion(df_vendors_new['visible'])
-            if 'open' in df_vendors_new.columns: 
-                df_vendors_new['open'] = safe_numeric_conversion(df_vendors_new['open'])
-            if 'status_id' in df_vendors_new.columns: 
-                df_vendors_new['status_id'] = safe_numeric_conversion(df_vendors_new['status_id'])
-            if 'latitude' in df_vendors_new.columns: 
-                df_vendors_new['latitude'] = safe_numeric_conversion(df_vendors_new['latitude'])
-            if 'longitude' in df_vendors_new.columns: 
-                df_vendors_new['longitude'] = safe_numeric_conversion(df_vendors_new['longitude'])
-            if 'radius' in df_vendors_new.columns: 
-                df_vendors_new['radius'] = safe_numeric_conversion(df_vendors_new['radius'])
-            if 'vendor_code' in df_vendors_new.columns: 
-                df_vendors_new['vendor_code'] = df_vendors_new['vendor_code'].astype(str)
+            if 'visible' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['visible'] = safe_numeric_conversion(df_vendors_new_tapsifood['visible'])
+            if 'open' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['open'] = safe_numeric_conversion(df_vendors_new_tapsifood['open'])
+            if 'status_id' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['status_id'] = safe_numeric_conversion(df_vendors_new_tapsifood['status_id'])
+            if 'latitude' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['latitude'] = safe_numeric_conversion(df_vendors_new_tapsifood['latitude'])
+            if 'longitude' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['longitude'] = safe_numeric_conversion(df_vendors_new_tapsifood['longitude'])
+            if 'radius' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['radius'] = safe_numeric_conversion(df_vendors_new_tapsifood['radius'])
+            if 'vendor_code' in df_vendors_new_tapsifood.columns: 
+                df_vendors_new_tapsifood['vendor_code'] = df_vendors_new_tapsifood['vendor_code'].astype(str)
             
             # NEW: Handle delivery type columns
-            if 'ofood_delivery' in df_vendors_new.columns:
-                df_vendors_new['ofood_delivery'] = safe_numeric_conversion(df_vendors_new['ofood_delivery'], 0).astype('int8')
-            if 'own_delivery' in df_vendors_new.columns:
-                df_vendors_new['own_delivery'] = safe_numeric_conversion(df_vendors_new['own_delivery'], 0).astype('int8')
+            if 'ofood_delivery' in df_vendors_new_tapsifood.columns:
+                df_vendors_new_tapsifood['ofood_delivery'] = safe_numeric_conversion(df_vendors_new_tapsifood['ofood_delivery'], 0).astype('int8')
+            if 'own_delivery' in df_vendors_new_tapsifood.columns:
+                df_vendors_new_tapsifood['own_delivery'] = safe_numeric_conversion(df_vendors_new_tapsifood['own_delivery'], 0).astype('int8')
             
             # Store original radius for reset functionality
-            if 'radius' in df_vendors_new.columns:
-                df_vendors_new['original_radius'] = df_vendors_new['radius'].copy()
+            if 'radius' in df_vendors_new_tapsifood.columns:
+                df_vendors_new_tapsifood['original_radius'] = df_vendors_new_tapsifood['radius'].copy()
                 
             # Final memory optimization
-            df_vendors_new = optimize_dataframe_memory(df_vendors_new)
+            df_vendors_new_tapsifood = optimize_dataframe_memory(df_vendors_new_tapsifood)
             
-            # Thread-safe update of global variable
+            # Thread-safe update of global variables
             with data_lock:
-                old_vendor_count = len(df_vendors) if df_vendors is not None else 0
-                df_vendors = df_vendors_new
-                new_vendor_count = len(df_vendors)
+                old_tapsifood_count = len(df_vendors_tapsifood) if df_vendors_tapsifood is not None else 0
+                df_vendors_tapsifood = df_vendors_new_tapsifood
+                
+                # Recreate unified dataset with current vendor map type
+                df_vendors_unified = create_unified_vendor_dataset(current_vendor_map_type)
+                new_unified_count = len(df_vendors_unified) if df_vendors_unified is not None else 0
                 
                 # Update refresh stats with precise timing
                 refresh_end_time = datetime.now()
@@ -897,11 +1134,12 @@ def refresh_vendor_data():
                 refresh_stats['vendor_refresh_errors'] = 0  # Reset error count on success
             
             refresh_duration = (refresh_end_time - refresh_start_time).total_seconds()
-            vendor_change = new_vendor_count - old_vendor_count
-            change_str = f"({vendor_change:+d})" if vendor_change != 0 else "(no change)"
+            tapsifood_change = len(df_vendors_new_tapsifood) - old_tapsifood_count
+            change_str = f"({tapsifood_change:+d})" if tapsifood_change != 0 else "(no change)"
             
-            logger.info(f"✅ Vendor data refreshed successfully in {refresh_duration:.2f}s")
-            logger.info(f"   Vendors: {old_vendor_count:,} → {new_vendor_count:,} {change_str}")
+            logger.info(f"✅ Multi-platform vendor data refreshed successfully in {refresh_duration:.2f}s")
+            logger.info(f"   Tapsifood vendors: {old_tapsifood_count:,} → {len(df_vendors_new_tapsifood):,} {change_str}")
+            logger.info(f"   Unified dataset ({current_vendor_map_type}): {new_unified_count:,} vendors")
             logger.info(f"   Next vendor refresh scheduled for: {refresh_end_time + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)}")
             
             # Clear coverage cache since vendor data changed
@@ -914,13 +1152,13 @@ def refresh_vendor_data():
             retry_count += 1
             refresh_stats['vendor_refresh_errors'] += 1
             
-            logger.error(f"❌ Vendor refresh attempt {retry_count}/{AUTO_REFRESH_MAX_RETRIES} failed: {e}")
+            logger.error(f"❌ Multi-platform vendor refresh attempt {retry_count}/{AUTO_REFRESH_MAX_RETRIES} failed: {e}")
             
             if retry_count < AUTO_REFRESH_MAX_RETRIES:
                 logger.info(f"   Retrying in {AUTO_REFRESH_RETRY_DELAY_SECONDS} seconds...")
                 time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)
             else:
-                logger.error("   Max retries reached. Vendor refresh failed.")
+                logger.error("   Max retries reached. Multi-platform vendor refresh failed.")
                 return False
     
     return False
@@ -1033,7 +1271,7 @@ def start_auto_refresh():
         logger.info("🔄 Auto-refresh is disabled")
         return
     
-    logger.info("🔄 Starting auto-refresh system...")
+    logger.info("🔄 Starting multi-platform auto-refresh system...")
     logger.info(f"   Vendor refresh interval: {VENDOR_REFRESH_INTERVAL_MINUTES} minutes")
     logger.info(f"   Order refresh interval: {ORDER_REFRESH_INTERVAL_MINUTES} minutes")
     logger.info(f"   Initial refresh delay: {REFRESH_ON_STARTUP_DELAY_SECONDS} seconds")
@@ -1063,26 +1301,28 @@ def start_auto_refresh():
     threading.Thread(target=delayed_vendor_refresh, daemon=True).start()
     threading.Thread(target=delayed_order_refresh, daemon=True).start()
     
-    logger.info("✅ Auto-refresh threads started")
+    logger.info("✅ Multi-platform auto-refresh threads started")
 
 def stop_auto_refresh():
     """Stop the auto-refresh system"""
     global refresh_stats
     
-    logger.info("🛑 Stopping auto-refresh system...")
+    logger.info("🛑 Stopping multi-platform auto-refresh system...")
     refresh_stats['refresh_active'] = False
     
     # Note: Daemon threads will stop automatically when the main process exits
-    logger.info("✅ Auto-refresh system stopped")
+    logger.info("✅ Multi-platform auto-refresh system stopped")
 
 def load_data():
-    """Load all required datasets from Metabase and local sources with memory optimization."""
-    global df_orders, df_vendors, gdf_marketing_areas, gdf_tehran_region, gdf_tehran_main_districts, df_coverage_targets, target_lookup_dict
-    print("Loading data...")
+    """Load all required datasets from Metabase and local sources with multi-platform support."""
+    global df_orders, df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced, df_vendors_unified, current_vendor_map_type
+    global gdf_marketing_areas, gdf_tehran_region, gdf_tehran_main_districts, df_coverage_targets, target_lookup_dict
+    
+    print("🏪 Loading multi-platform vendor data...")
     start_time = time.time()
     
     try:
-        # 1. ORDER DATA - Load and optimize
+        # 1. ORDER DATA - Load and optimize (unchanged)
         print(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
         df_orders = fetch_question_data(
             question_id=ORDER_DATA_QUESTION_ID,
@@ -1124,12 +1364,10 @@ def load_data():
     except Exception as e:
         print(f"Error loading order data: {e}")
         df_orders = pd.DataFrame()
-        
-    # 2. VENDOR DATA - Load and optimize  
-    graded_file = os.path.join(SRC_DIR, 'vendor', 'graded.csv')
+    
+    # 2. TAPSIFOOD VENDOR DATA - Load and optimize  
     try:
         vendor_start = time.time()
-        # Optimize dtypes for vendors too
         vendor_dtype = {
             'city_id': 'Int64',
             'vendor_code': 'str',
@@ -1142,7 +1380,7 @@ def load_data():
             'own_delivery': 'int8'        # NEW: Own delivery type
         }
         
-        print(f"🚀 Fetching LIVE vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
+        print(f"🚀 Fetching LIVE Tapsifood vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
         df_vendors_raw = fetch_question_data(
             question_id=VENDOR_DATA_QUESTION_ID,
             metabase_url=METABASE_URL,
@@ -1160,81 +1398,95 @@ def load_data():
             
             df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
             
-            # MODIFIED: Use the business_line from df_vendors directly, don't override it
-            df_vendors = df_vendors_raw.copy()
+            # Store as Tapsifood vendor data
+            df_vendors_tapsifood = df_vendors_raw.copy()
             
             # Debug: Print business line info
-            if 'business_line' in df_vendors.columns:
-                print(f"Business lines in vendors: {sorted(df_vendors['business_line'].unique())}")
-                print(f"Business line counts: {df_vendors['business_line'].value_counts()}")
+            if 'business_line' in df_vendors_tapsifood.columns:
+                print(f"Business lines in Tapsifood vendors: {sorted(df_vendors_tapsifood['business_line'].unique())}")
+                print(f"Business line counts: {df_vendors_tapsifood['business_line'].value_counts()}")
             else:
-                print("WARNING: business_line column not found in vendor data!")
-            
-            try:
-                df_graded_data = pd.read_csv(graded_file, dtype={'vendor_code': 'str', 'grade': 'category'})
-                if 'vendor_code' in df_vendors.columns and 'vendor_code' in df_graded_data.columns:
-                    df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
-                    df_graded_data['vendor_code'] = df_graded_data['vendor_code'].astype(str)
-                    df_vendors = pd.merge(df_vendors, df_graded_data[['vendor_code', 'grade']], on='vendor_code', how='left')
-                    if 'grade' in df_vendors.columns and isinstance(df_vendors['grade'].dtype, pd.CategoricalDtype):
-                        df_vendors['grade'] = df_vendors['grade'].cat.add_categories(['Ungraded'])
-                    df_vendors['grade'] = df_vendors['grade'].fillna('Ungraded').astype('category')
-                    print(f"Grades loaded and merged. Found {df_vendors['grade'].notna().sum()} graded vendors.")
-                else:
-                    print("Warning: 'vendor_code' column missing in vendors or graded CSV. Grades not merged.")
-                    if 'grade' not in df_vendors.columns: 
-                        df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
-            except Exception as eg:
-                print(f"Error loading or merging graded.csv: {eg}. Proceeding without grades.")
-                if 'grade' not in df_vendors.columns: 
-                    df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
-            
-            # REMOVED: Don't override business_line from orders - use the one from vendors directly
+                print("WARNING: business_line column not found in Tapsifood vendor data!")
             
             for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
-                if col not in df_vendors.columns: df_vendors[col] = np.nan
+                if col not in df_vendors_tapsifood.columns: df_vendors_tapsifood[col] = np.nan
                 
             # FIX: Proper NaN handling for numeric columns
-            if 'visible' in df_vendors.columns: 
-                df_vendors['visible'] = safe_numeric_conversion(df_vendors['visible'])
-            if 'open' in df_vendors.columns: 
-                df_vendors['open'] = safe_numeric_conversion(df_vendors['open'])
-            if 'status_id' in df_vendors.columns: 
-                df_vendors['status_id'] = safe_numeric_conversion(df_vendors['status_id'])
-            if 'latitude' in df_vendors.columns: 
-                df_vendors['latitude'] = safe_numeric_conversion(df_vendors['latitude'])
-            if 'longitude' in df_vendors.columns: 
-                df_vendors['longitude'] = safe_numeric_conversion(df_vendors['longitude'])
-            if 'radius' in df_vendors.columns: 
-                df_vendors['radius'] = safe_numeric_conversion(df_vendors['radius'])
-            if 'vendor_code' in df_vendors.columns: 
-                df_vendors['vendor_code'] = df_vendors['vendor_code'].astype(str)
+            if 'visible' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['visible'] = safe_numeric_conversion(df_vendors_tapsifood['visible'])
+            if 'open' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['open'] = safe_numeric_conversion(df_vendors_tapsifood['open'])
+            if 'status_id' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['status_id'] = safe_numeric_conversion(df_vendors_tapsifood['status_id'])
+            if 'latitude' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['latitude'] = safe_numeric_conversion(df_vendors_tapsifood['latitude'])
+            if 'longitude' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['longitude'] = safe_numeric_conversion(df_vendors_tapsifood['longitude'])
+            if 'radius' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['radius'] = safe_numeric_conversion(df_vendors_tapsifood['radius'])
+            if 'vendor_code' in df_vendors_tapsifood.columns: 
+                df_vendors_tapsifood['vendor_code'] = df_vendors_tapsifood['vendor_code'].astype(str)
             
             # NEW: Handle delivery type columns
-            if 'ofood_delivery' in df_vendors.columns:
-                df_vendors['ofood_delivery'] = safe_numeric_conversion(df_vendors['ofood_delivery'], 0).astype('int8')
-            if 'own_delivery' in df_vendors.columns:
-                df_vendors['own_delivery'] = safe_numeric_conversion(df_vendors['own_delivery'], 0).astype('int8')
+            if 'ofood_delivery' in df_vendors_tapsifood.columns:
+                df_vendors_tapsifood['ofood_delivery'] = safe_numeric_conversion(df_vendors_tapsifood['ofood_delivery'], 0).astype('int8')
+            if 'own_delivery' in df_vendors_tapsifood.columns:
+                df_vendors_tapsifood['own_delivery'] = safe_numeric_conversion(df_vendors_tapsifood['own_delivery'], 0).astype('int8')
             
             # Store original radius for reset functionality
-            if 'radius' in df_vendors.columns:
-                df_vendors['original_radius'] = df_vendors['radius'].copy()
+            if 'radius' in df_vendors_tapsifood.columns:
+                df_vendors_tapsifood['original_radius'] = df_vendors_tapsifood['radius'].copy()
                 
             # FINAL MEMORY OPTIMIZATION after all processing
-            df_vendors = optimize_dataframe_memory(df_vendors)
+            df_vendors_tapsifood = optimize_dataframe_memory(df_vendors_tapsifood)
                 
-            print(f"Vendors loaded: {len(df_vendors)} rows in {time.time() - vendor_start:.2f}s")
+            print(f"Tapsifood vendors loaded: {len(df_vendors_tapsifood)} rows in {time.time() - vendor_start:.2f}s")
         else:
-            df_vendors = pd.DataFrame()
-            print("No vendor data received")
+            df_vendors_tapsifood = pd.DataFrame()
+            print("No Tapsifood vendor data received")
             
     except Exception as e:
-        print(f"Error loading vendor data: {e}")
-        df_vendors = pd.DataFrame()
-        if df_vendors is not None and 'grade' not in df_vendors.columns: 
-            df_vendors['grade'] = pd.Categorical(['Ungraded'] * len(df_vendors))
+        print(f"Error loading Tapsifood vendor data: {e}")
+        df_vendors_tapsifood = pd.DataFrame()
     
-    # 3. Polygon Data - Load in parallel if possible
+    # 3. NEW: Load Snappfood vendor data
+    try:
+        snappfood_start = time.time()
+        df_vendors_snappfood = load_snappfood_vendors()
+        if not df_vendors_snappfood.empty:
+            print(f"Snappfood vendors processed in {time.time() - snappfood_start:.2f}s")
+    except Exception as e:
+        print(f"Error loading Snappfood vendor data: {e}")
+        df_vendors_snappfood = pd.DataFrame()
+    
+    # 4. NEW: Load enhanced graded data with dual mapping
+    try:
+        graded_start = time.time()
+        df_graded_enhanced = load_enhanced_graded_data()
+        if not df_graded_enhanced.empty:
+            print(f"Enhanced graded data processed in {time.time() - graded_start:.2f}s")
+    except Exception as e:
+        print(f"Error loading enhanced graded data: {e}")
+        df_graded_enhanced = pd.DataFrame()
+    
+    # 5. NEW: Create unified vendor dataset based on default vendor map type
+    try:
+        unified_start = time.time()
+        df_vendors_unified = create_unified_vendor_dataset(current_vendor_map_type)
+        if not df_vendors_unified.empty:
+            print(f"Unified vendor dataset ({current_vendor_map_type}) created: {len(df_vendors_unified)} vendors in {time.time() - unified_start:.2f}s")
+            
+            # Show vendor source distribution
+            if 'vendor_source' in df_vendors_unified.columns:
+                source_dist = df_vendors_unified['vendor_source'].value_counts()
+                print(f"   Vendor sources: {source_dist.to_dict()}")
+        else:
+            print("No unified vendor dataset created")
+    except Exception as e:
+        print(f"Error creating unified vendor dataset: {e}")
+        df_vendors_unified = pd.DataFrame()
+    
+    # 6. Polygon Data - Load in parallel if possible (unchanged)
     poly_start = time.time()
     marketing_areas_base = os.path.join(SRC_DIR, 'polygons', 'tapsifood_marketing_areas')
     
@@ -1365,15 +1617,25 @@ def load_data():
         total_memory_mb += orders_memory
         print(f"   📊 Orders memory: {orders_memory:.1f} MB")
     
-    if df_vendors is not None and not df_vendors.empty:
-        vendors_memory = df_vendors.memory_usage(deep=True).sum() / 1024**2
-        total_memory_mb += vendors_memory
-        print(f"   🏪 Vendors memory: {vendors_memory:.1f} MB")
+    if df_vendors_tapsifood is not None and not df_vendors_tapsifood.empty:
+        tapsifood_memory = df_vendors_tapsifood.memory_usage(deep=True).sum() / 1024**2
+        total_memory_mb += tapsifood_memory
+        print(f"   🏪 Tapsifood vendors memory: {tapsifood_memory:.1f} MB")
+    
+    if df_vendors_snappfood is not None and not df_vendors_snappfood.empty:
+        snappfood_memory = df_vendors_snappfood.memory_usage(deep=True).sum() / 1024**2
+        total_memory_mb += snappfood_memory
+        print(f"   📱 Snappfood vendors memory: {snappfood_memory:.1f} MB")
+    
+    if df_vendors_unified is not None and not df_vendors_unified.empty:
+        unified_memory = df_vendors_unified.memory_usage(deep=True).sum() / 1024**2
+        total_memory_mb += unified_memory
+        print(f"   🔄 Unified vendors memory: {unified_memory:.1f} MB")
     
     print(f"   💾 Total DataFrame memory: {total_memory_mb:.1f} MB")
     
     total_time = time.time() - start_time
-    print(f"Data loading complete in {total_time:.2f} seconds.")
+    print(f"Multi-platform data loading complete in {total_time:.2f} seconds.")
     
     # NEW: Start auto-refresh after initial data loading
     if ENABLE_AUTO_REFRESH:
@@ -1389,7 +1651,7 @@ def serve_index():
 
 @app.route('/api/initial-data', methods=['GET'])
 def get_initial_data():
-    if df_orders is None or df_vendors is None:
+    if df_orders is None or df_vendors_unified is None:
         return jsonify({"error": "Data not loaded properly"}), 500
     
     cities = [{"id": cid, "name": name} for cid, name in city_id_map.items()]
@@ -1408,15 +1670,26 @@ def get_initial_data():
     tehran_main_districts = get_district_names_from_gdf(gdf_tehran_main_districts, "Main Tehran")
     
     vendor_statuses = []
-    if not df_vendors.empty and 'status_id' in df_vendors.columns:
+    if not df_vendors_unified.empty and 'status_id' in df_vendors_unified.columns:
         # Filter out NaN values before converting to int
-        status_series = df_vendors['status_id'].dropna()
+        status_series = df_vendors_unified['status_id'].dropna()
         if not status_series.empty:
             vendor_statuses = sorted([int(x) for x in status_series.unique()])
     
     vendor_grades = []
-    if not df_vendors.empty and 'grade' in df_vendors.columns:
-        vendor_grades = sorted(safe_tolist(df_vendors['grade'].astype(str)))
+    if not df_vendors_unified.empty and 'grade' in df_vendors_unified.columns:
+        vendor_grades = sorted(safe_tolist(df_vendors_unified['grade'].astype(str)))
+    
+    # NEW: Add vendor map type options
+    vendor_map_type_options = [
+        {
+            "value": key,
+            "name": config["name"],
+            "description": config["description"],
+            "default": config.get("default", False)
+        }
+        for key, config in VENDOR_MAP_TYPES.items()
+    ]
     
     return jsonify({
         "cities": cities,
@@ -1425,7 +1698,10 @@ def get_initial_data():
         "tehran_region_districts": tehran_region_districts,
         "tehran_main_districts": tehran_main_districts,
         "vendor_statuses": vendor_statuses,
-        "vendor_grades": vendor_grades
+        "vendor_grades": vendor_grades,
+        # NEW: Multi-platform vendor options
+        "vendor_map_type_options": vendor_map_type_options,
+        "default_vendor_map_type": DEFAULT_VENDOR_MAP_TYPE
     })
 
 @app.route('/api/refresh-status', methods=['GET'])
@@ -1470,8 +1746,15 @@ def get_refresh_status():
                 "seconds_until_next": int((order_next_refresh - current_time).total_seconds()) if order_next_refresh and order_next_refresh > current_time else 0
             },
             "current_data_counts": {
-                "vendors": len(df_vendors) if df_vendors is not None else 0,
+                "tapsifood_vendors": len(df_vendors_tapsifood) if df_vendors_tapsifood is not None else 0,
+                "snappfood_vendors": len(df_vendors_snappfood) if df_vendors_snappfood is not None else 0,
+                "unified_vendors": len(df_vendors_unified) if df_vendors_unified is not None else 0,
                 "orders": len(df_orders) if df_orders is not None else 0
+            },
+            # NEW: Multi-platform vendor info
+            "multi_platform_info": {
+                "current_vendor_map_type": current_vendor_map_type,
+                "available_types": list(VENDOR_MAP_TYPES.keys())
             }
         }
     
@@ -1494,7 +1777,7 @@ def trigger_manual_refresh():
         overall_success = True
         
         if data_type in ['vendor', 'both']:
-            logger.info("🔄 Manual vendor refresh triggered via API")
+            logger.info("🔄 Manual multi-platform vendor refresh triggered via API")
             vendor_success = refresh_vendor_data()
             results['vendor_success'] = vendor_success
             if not vendor_success:
@@ -1570,9 +1853,18 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
             enriched_gdf['grade_counts'] = enriched_gdf[name_col].astype(str).map(grade_counts_dict)
         else:
              enriched_gdf['grade_counts'] = None
+        
+        # NEW: Vendor count by platform source
+        if 'vendor_source' in joined_vendors.columns:
+            source_counts_series = joined_vendors.groupby([name_col, 'vendor_source'], observed=True).size().unstack(fill_value=0)
+            source_counts_dict = source_counts_series.apply(lambda row: {k: v for k, v in row.items() if v > 0}, axis=1).to_dict()
+            enriched_gdf['source_counts'] = enriched_gdf[name_col].astype(str).map(source_counts_dict)
+        else:
+            enriched_gdf['source_counts'] = None
     else:
         enriched_gdf['vendor_count'] = 0
         enriched_gdf['grade_counts'] = None
+        enriched_gdf['source_counts'] = None
     
     enriched_gdf['vendor_count'] = enriched_gdf['vendor_count'].fillna(0).astype(int)
     # --- 2. Unique User Enrichment (Date-Ranged & Total) ---
@@ -1615,8 +1907,10 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
 
 @app.route('/api/map-data', methods=['GET'])
 def get_map_data():
-    if df_orders is None or df_vendors is None:
-        return jsonify({"error": "Server data not loaded"}), 500
+    global df_vendors_unified, current_vendor_map_type
+    
+    if df_orders is None:
+        return jsonify({"error": "Server order data not loaded"}), 500
     try:
         # Start timing
         request_start = time.time()
@@ -1624,7 +1918,7 @@ def get_map_data():
         # Use thread-safe access to global data
         with data_lock:
             df_orders_copy = df_orders.copy() if df_orders is not None else pd.DataFrame()
-            df_vendors_copy = df_vendors.copy() if df_vendors is not None else pd.DataFrame()
+            df_vendors_copy = df_vendors_unified.copy() if df_vendors_unified is not None else pd.DataFrame()
         
         # --- Parsing of filters ---
         city_name = request.args.get('city', default="tehran", type=str)
@@ -1639,12 +1933,18 @@ def get_map_data():
         selected_vendor_grades = [g.strip() for g in request.args.getlist('vendor_grades') if g.strip()]
         vendor_visible_str = request.args.get('vendor_visible', default="any", type=str)
         vendor_is_open_str = request.args.get('vendor_is_open', default="any", type=str)
-        vendor_delivery_type_str = request.args.get('vendor_delivery_type', default="all", type=str)
         vendor_area_main_type = request.args.get('vendor_area_main_type', default="all", type=str)
         selected_vendor_area_sub_types = [s.strip() for s in request.args.getlist('vendor_area_sub_type') if s.strip()]
         heatmap_type_req = request.args.get('heatmap_type_request', default="none", type=str)
         area_type_display = request.args.get('area_type_display', default="tapsifood_marketing_areas", type=str)
         selected_polygon_sub_types = [s.strip() for s in request.args.getlist('area_sub_type_filter') if s.strip()]
+        
+        # NEW: Multi-platform vendor filters
+        vendor_map_type = request.args.get('vendor_map_type', default=current_vendor_map_type, type=str)
+        is_express_filter = request.args.get('is_express', default="all", type=str)
+        is_dual_filter = request.args.get('is_dual', default="all", type=str)
+        is_own_delivery_filter = request.args.get('is_own_delivery', default="all", type=str)
+        is_ofood_delivery_filter = request.args.get('is_ofood_delivery', default="all", type=str)
         
         # NEW: Get zoom level for adaptive heatmap processing
         zoom_level = request.args.get('zoom_level', default=11, type=float)
@@ -1654,18 +1954,29 @@ def get_map_data():
         radius_mode = request.args.get('radius_mode', default='percentage', type=str)
         radius_fixed = request.args.get('radius_fixed', default=3.0, type=float)
         
+        # NEW: Check if vendor map type has changed and update unified dataset
+        if vendor_map_type != current_vendor_map_type:
+            print(f"DEBUG: Vendor map type changed from {current_vendor_map_type} to {vendor_map_type}")
+            current_vendor_map_type = vendor_map_type
+            with data_lock:
+                df_vendors_unified = create_unified_vendor_dataset(current_vendor_map_type)
+                df_vendors_copy = df_vendors_unified.copy() if df_vendors_unified is not None else pd.DataFrame()
+            print(f"DEBUG: Updated unified dataset: {len(df_vendors_copy)} vendors")
+        
         # DEBUG: Print filter info
+        print(f"DEBUG: Vendor map type = {vendor_map_type}")
         print(f"DEBUG: Business line filter = {selected_business_lines}")
         print(f"DEBUG: Total vendors before filtering = {len(df_vendors_copy)}")
         print(f"DEBUG: Radius mode = {radius_mode}")
-        print(f"DEBUG: Delivery type filter = {vendor_delivery_type_str}")
+        print(f"DEBUG: is_express filter = {is_express_filter}")
+        print(f"DEBUG: is_dual filter = {is_dual_filter}")
         
         heatmap_data = []
         vendor_markers = []
         polygons_geojson = {"type": "FeatureCollection", "features": []}
         coverage_grid_data = []
         
-        # --- IMPROVED Vendor filtering logic with better debugging ---
+        # --- IMPROVED Vendor filtering logic with multi-platform support ---
         df_v_filtered = df_vendors_copy.copy()
         
         # Check if required columns exist
@@ -1686,6 +1997,14 @@ def get_map_data():
                 else:
                     # Handle NaN values in original_radius for percentage mode
                     df_v_filtered['radius'] = df_v_filtered['original_radius'].fillna(3.0) * radius_modifier
+            elif 'radius' in df_v_filtered.columns:
+                # Handle case where original_radius doesn't exist (e.g., Snappfood vendors)
+                if radius_mode == 'fixed':
+                    df_v_filtered['radius'] = radius_fixed
+                elif radius_mode == 'grade':
+                    df_v_filtered = apply_grade_based_radius(df_v_filtered)
+                else:
+                    df_v_filtered['radius'] = df_v_filtered['radius'].fillna(3.0) * radius_modifier
             
             # 2. Remove vendors with invalid coordinates
             df_v_filtered = df_v_filtered.dropna(subset=['latitude', 'longitude', 'vendor_code'])
@@ -1727,7 +2046,28 @@ def get_map_data():
                             df_v_filtered = df_v_filtered[df_v_filtered['vendor_code'].isin(codes_in_area)]
                 print(f"DEBUG: Vendors after area filtering = {len(df_v_filtered)}")
             
-            # 7. Apply other vendor filters
+            # 7. NEW: Apply multi-platform specific filters
+            if not df_v_filtered.empty:
+                # is_express filter (applies to Snappfood vendors)
+                if is_express_filter != "all" and 'is_express' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['is_express'] == int(is_express_filter)]
+                    print(f"DEBUG: Vendors after is_express filtering = {len(df_v_filtered)}")
+                
+                # is_dual filter (applies to all vendors)
+                if is_dual_filter != "all" and 'is_dual' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['is_dual'] == int(is_dual_filter)]
+                    print(f"DEBUG: Vendors after is_dual filtering = {len(df_v_filtered)}")
+                
+                # Delivery type filters (apply to Tapsifood vendors)
+                if is_own_delivery_filter != "all" and 'own_delivery' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['own_delivery'] == int(is_own_delivery_filter)]
+                    print(f"DEBUG: Vendors after is_own_delivery filtering = {len(df_v_filtered)}")
+                
+                if is_ofood_delivery_filter != "all" and 'ofood_delivery' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['ofood_delivery'] == int(is_ofood_delivery_filter)]
+                    print(f"DEBUG: Vendors after is_ofood_delivery filtering = {len(df_v_filtered)}")
+            
+            # 8. Apply other vendor filters
             if not df_v_filtered.empty:
                 if selected_vendor_status_ids and 'status_id' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['status_id'].isin(selected_vendor_status_ids)]
@@ -1741,31 +2081,6 @@ def get_map_data():
                 if vendor_is_open_str != "any" and 'open' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['open'] == int(vendor_is_open_str)]
                     print(f"DEBUG: Vendors after open filtering = {len(df_v_filtered)}")
-                
-                # NEW: Apply delivery type filter
-                if vendor_delivery_type_str != "all":
-                    if vendor_delivery_type_str == "ofood_only":
-                        # oFood only: ofood=1, own=0
-                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
-                            df_v_filtered = df_v_filtered[
-                                (df_v_filtered['ofood_delivery'] == 1) & 
-                                (df_v_filtered['own_delivery'] == 0)
-                            ]
-                    elif vendor_delivery_type_str == "own_only":
-                        # Own delivery only: ofood=0, own=1
-                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
-                            df_v_filtered = df_v_filtered[
-                                (df_v_filtered['ofood_delivery'] == 0) & 
-                                (df_v_filtered['own_delivery'] == 1)
-                            ]
-                    elif vendor_delivery_type_str == "both":
-                        # Both delivery types: ofood=1, own=1
-                        if 'ofood_delivery' in df_v_filtered.columns and 'own_delivery' in df_v_filtered.columns:
-                            df_v_filtered = df_v_filtered[
-                                (df_v_filtered['ofood_delivery'] == 1) & 
-                                (df_v_filtered['own_delivery'] == 1)
-                            ]
-                    print(f"DEBUG: Vendors after delivery type filtering ({vendor_delivery_type_str}) = {len(df_v_filtered)}")
             
             if not df_v_filtered.empty:
                 # FIX: Clean data before converting to dict
@@ -1862,7 +2177,8 @@ def get_map_data():
                 'city': city_name,
                 'vendor_codes': vendor_codes_for_cache,
                 'radius_modifier': radius_modifier, 'radius_mode': radius_mode, 'radius_fixed': radius_fixed,
-                'business_lines': sorted(selected_business_lines)
+                'business_lines': sorted(selected_business_lines),
+                'vendor_map_type': vendor_map_type  # NEW: Include vendor map type in cache
             }, sort_keys=True).encode()).hexdigest()
             
             if cache_key in coverage_cache:
@@ -1960,7 +2276,7 @@ def get_map_data():
                 polygons_geojson = clean_gdf.__geo_interface__
         
         request_time = time.time() - request_start
-        print(f"Request processed in {request_time:.2f}s")
+        print(f"Multi-platform request processed in {request_time:.2f}s")
         
         response_data = {
             "vendors": vendor_markers, 
@@ -1971,6 +2287,9 @@ def get_map_data():
             # NEW: Add metadata for frontend optimization
             "zoom_level": zoom_level,
             "heatmap_type": heatmap_type_req,
+            # NEW: Multi-platform metadata
+            "vendor_map_type": vendor_map_type,
+            "vendor_sources": list(set([v.get('vendor_source') for v in vendor_markers if v.get('vendor_source')])) if vendor_markers else [],
             # NEW: Add refresh metadata
             "data_freshness": {
                 "vendor_last_refresh": refresh_stats['vendor_last_refresh'].isoformat() if refresh_stats['vendor_last_refresh'] else None,

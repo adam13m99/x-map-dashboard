@@ -1,4 +1,3 @@
-// Enhanced script.js with Multi-Platform Vendor Support and Auto-Refresh Timer System
 document.addEventListener('DOMContentLoaded', () => {
     let map;
     let vendorLayerGroup = L.featureGroup();
@@ -15,15 +14,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let initialFilterData = {};
     let lastHeatmapData = null;
     let currentRadiusModifier = 1.0;
-    let currentRadiusMode = 'percentage'; // Can be 'percentage', 'fixed', or 'grade'
+    let currentRadiusMode = 'percentage';
     let currentRadiusFixed = 3.0;
     let marketingAreasOnTop = false;
     
-    // NEW: Multi-platform vendor management
     let currentVendorMapType = 'tapsifood_only';
     let vendorMapTypeOptions = [];
     
-    // Heatmap management variables
     let currentZoomLevel = 11;
     let heatmapConfig = {
         autoOptimize: true,
@@ -37,7 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const API_BASE_URL = '/api';
     
-    // --- DOM Elements ---
     const bodyEl = document.body;
     const daterangeStartEl = document.getElementById('daterange-start');
     const daterangeEndEl = document.getElementById('daterange-end');
@@ -56,7 +52,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const areaFillNoneEl = document.getElementById('area-fill-none');
     const applyFiltersBtn = document.getElementById('apply-filters-btn');
     
-    // NEW: Multi-platform vendor elements
     const vendorMapTypeEl = document.getElementById('vendor-map-type');
     const isExpressFilterEl = document.getElementById('is-express');
     const isExpressFilterContainer = document.getElementById('is-express-filter-container');
@@ -65,20 +60,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const isOwnDeliveryEl = document.getElementById('is-own-delivery');
     const isOfoodDeliveryEl = document.getElementById('is-ofood-delivery');
     const deliveryFiltersContainer = document.getElementById('delivery-filters-container');
+    const availabilityMinEl = document.getElementById('availability-min');
+    const availabilityFilterContainer = document.getElementById('availability-filter-container');
     
-    // Radius modifier elements
     const vendorRadiusModifierEl = document.getElementById('vendor-radius-modifier');
     const radiusModifierValueEl = document.getElementById('radius-modifier-value');
     const btnResetRadius = document.getElementById('btn-reset-radius');
     
-    // Radius mode elements
     const radiusModeSelector = document.getElementById('radius-mode-selector');
     const radiusPercentageControl = document.getElementById('radius-percentage-control');
     const radiusFixedControl = document.getElementById('radius-fixed-control');
     const vendorRadiusFixedEl = document.getElementById('vendor-radius-fixed');
     const radiusFixedValueEl = document.getElementById('radius-fixed-value');
     
-    // Grid visualization elements
     const gridBlurEl = document.getElementById('grid-blur');
     const gridBlurValueEl = document.getElementById('grid-blur-value');
     const gridFadeEl = document.getElementById('grid-fade');
@@ -88,7 +82,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const gridPointSizeEl = document.getElementById('grid-point-size');
     const gridPointSizeValueEl = document.getElementById('grid-point-size-value');
     
-    // Lat/Lng finder elements
     const latFinderInputEl = document.getElementById('lat-finder-input');
     const lngFinderInputEl = document.getElementById('lng-finder-input');
     const btnFindLocation = document.getElementById('btn-find-location');
@@ -112,7 +105,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnToggleVendors = document.getElementById('btn-toggle-vendors');
     const btnClearHeatmap = document.getElementById('btn-clear-heatmap');
     
-    // Heatmap control elements
     const heatmapRadiusEl = document.getElementById('heatmap-radius');
     const heatmapRadiusValueEl = document.getElementById('heatmap-radius-value');
     const heatmapBlurEl = document.getElementById('heatmap-blur');
@@ -158,7 +150,6 @@ document.addEventListener('DOMContentLoaded', () => {
         shadowSize: [12 * (41/25) * 2, 12 * (41/25) * 2],
     });
 
-    // Enhanced heatmap configuration functions
     function calculateOptimalHeatmapParams(data, zoomLevel) {
         if (!data || data.length === 0) {
             return { max: 1.0, radius: 25, blur: 15 };
@@ -169,17 +160,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return { max: 1.0, radius: 25, blur: 15 };
         }
 
-        // Calculate percentiles for robust statistics
         values.sort((a, b) => a - b);
         const p75 = values[Math.floor(values.length * 0.75)];
         const p90 = values[Math.floor(values.length * 0.90)];
         const p95 = values[Math.floor(values.length * 0.95)];
 
-        // Set max to 90th percentile to avoid outlier dominance
         let optimalMax = p90 / 100.0;
         if (optimalMax <= 0) optimalMax = 1.0;
         
-        // Zoom-dependent radius scaling
         let radiusMultiplier = 1.0;
         if (zoomLevel <= 10) {
             radiusMultiplier = 1.8;
@@ -193,15 +181,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const optimalRadius = Math.round(heatmapConfig.baseRadius * radiusMultiplier);
 
-        // Data density-dependent blur
         const dataDensity = data.length / 1000;
         let blurMultiplier = 1.0;
         if (dataDensity > 3) {
-            blurMultiplier = 1.4;  // More blur for very dense data
+            blurMultiplier = 1.4;
         } else if (dataDensity > 1.5) {
-            blurMultiplier = 1.2;  // Slightly more blur for dense data
+            blurMultiplier = 1.2;
         } else if (dataDensity < 0.5) {
-            blurMultiplier = 0.8;  // Less blur for sparse data
+            blurMultiplier = 0.8;
         }
 
         const optimalBlur = Math.round(heatmapConfig.baseBlur * blurMultiplier);
@@ -220,8 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const userMax = parseFloat(heatmapMaxValEl.value);
         
         if (!heatmapConfig.autoOptimize) {
-            // Use user-defined values with minimal zoom adjustment
-            const zoomFactor = Math.pow(1.1, currentZoom - 11); // Reference zoom 11
+            const zoomFactor = Math.pow(1.1, currentZoom - 11);
             return {
                 radius: Math.round(userRadius * Math.min(2, Math.max(0.5, zoomFactor))),
                 blur: userBlur,
@@ -230,9 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
 
-        // Auto-optimize mode
         if (lastOptimalParams && heatmapConfig.smoothTransitions) {
-            // Smooth transition to new optimal parameters
             const optimal = calculateOptimalHeatmapParams(lastHeatmapData, currentZoom);
             return {
                 radius: Math.round((lastOptimalParams.radius + optimal.radius) / 2),
@@ -248,7 +232,6 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateHeatmapControlsDisplay(optimalParams) {
         if (!heatmapConfig.autoOptimize || !optimalParams) return;
 
-        // Update sliders to show optimal values without triggering events
         const originalRadiusHandler = heatmapRadiusEl.oninput;
         const originalBlurHandler = heatmapBlurEl.oninput;
         const originalMaxHandler = heatmapMaxValEl.oninput;
@@ -266,7 +249,6 @@ document.addEventListener('DOMContentLoaded', () => {
         heatmapMaxValEl.value = optimalParams.max.toFixed(1);
         heatmapMaxValValueEl.textContent = optimalParams.max.toFixed(1);
 
-        // Restore event handlers
         setTimeout(() => {
             heatmapRadiusEl.oninput = originalRadiusHandler;
             heatmapBlurEl.oninput = originalBlurHandler;
@@ -292,7 +274,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if(vendorsAreVisible) redrawVendorMarkersAndRadii();
     }
 
-    // NEW: Multi-platform vendor helper functions
     function populateVendorMapTypeOptions() {
         if (!initialFilterData || !initialFilterData.vendor_map_type_options) return;
         
@@ -317,48 +298,38 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedType = vendorMapTypeEl.value;
         console.log('Updating platform-specific filters for type:', selectedType);
         
-        // Reset all filters visibility first
         isExpressFilterContainer.style.display = 'none';
         isDualFilterContainer.style.display = 'none';
         deliveryFiltersContainer.style.display = 'none';
+        availabilityFilterContainer.style.display = 'none';
         
         switch(selectedType) {
             case 'tapsifood_only':
-                // Show: own_delivery, ofood_delivery, is_dual
-                // Hide: is_express
                 isDualFilterContainer.style.display = 'block';
                 deliveryFiltersContainer.style.display = 'block';
+                availabilityFilterContainer.style.display = 'block';
                 isExpressFilterContainer.style.display = 'none';
-                
-                // Update tooltips for this mode
                 updateFilterTooltips('tapsifood_only');
                 break;
                 
             case 'all_snappfood':
             case 'snappfood_exclude_tapsifood':
-                // Show: is_dual, is_express
-                // Hide: own_delivery, ofood_delivery
                 isDualFilterContainer.style.display = 'block';
                 isExpressFilterContainer.style.display = 'block';
                 deliveryFiltersContainer.style.display = 'none';
-                
-                // Update tooltips for Snappfood modes
+                availabilityFilterContainer.style.display = 'none';
                 updateFilterTooltips('snappfood_only');
                 break;
                 
             case 'combined_no_overlap':
-                // Show: is_dual, is_express, own_delivery, ofood_delivery
-                // All filters are relevant - complex interaction logic applies
                 isDualFilterContainer.style.display = 'block';
                 isExpressFilterContainer.style.display = 'block';
                 deliveryFiltersContainer.style.display = 'block';
-                
-                // Update tooltips for combined mode
+                availabilityFilterContainer.style.display = 'block';
                 updateFilterTooltips('combined');
                 break;
                 
             default:
-                // Fallback - show dual only
                 isDualFilterContainer.style.display = 'block';
                 updateFilterTooltips('default');
                 break;
@@ -367,16 +338,17 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Platform filters updated for', selectedType, ':', {
             dual: isDualFilterContainer.style.display !== 'none',
             express: isExpressFilterContainer.style.display !== 'none',
-            delivery: deliveryFiltersContainer.style.display !== 'none'
+            delivery: deliveryFiltersContainer.style.display !== 'none',
+            availability: availabilityFilterContainer.style.display !== 'none'
         });
     }
 
     function updateFilterTooltips(mode) {
-        // Update tooltips and descriptions based on the current mode
         const expressEl = isExpressFilterEl;
         const dualEl = isDualFilterEl;
         const ownDeliveryEl = isOwnDeliveryEl;
         const ofoodDeliveryEl = isOfoodDeliveryEl;
+        const availabilityEl = availabilityMinEl;
         
         switch(mode) {
             case 'tapsifood_only':
@@ -388,6 +360,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (ofoodDeliveryEl) {
                     ofoodDeliveryEl.title = 'Filter Tapsifood vendors by oFood delivery availability';
+                }
+                if (availabilityEl) {
+                    availabilityEl.title = 'Filter Tapsifood vendors by minimum availability threshold';
                 }
                 break;
                 
@@ -413,6 +388,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (ofoodDeliveryEl) {
                     ofoodDeliveryEl.title = 'Filter oFood delivery (affects Tapsifood + dual vendors)';
                 }
+                if (availabilityEl) {
+                    availabilityEl.title = 'Filter availability (affects Tapsifood + dual vendors)';
+                }
                 break;
                 
             default:
@@ -429,7 +407,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function addFilterExplanationHelper() {
-        // Create a small info box that explains current filter behavior
         const infoBox = document.createElement('div');
         infoBox.id = 'filter-explanation-box';
         infoBox.style.cssText = `
@@ -452,7 +429,6 @@ document.addEventListener('DOMContentLoaded', () => {
             transition: all 0.2s ease-in-out;
         `;
         
-        // Add a close button
         const closeBtn = document.createElement('button');
         closeBtn.innerHTML = '×';
         closeBtn.style.cssText = `
@@ -489,38 +465,37 @@ document.addEventListener('DOMContentLoaded', () => {
         
         infoBox.appendChild(closeBtn);
         
-        // Create content area
         const contentDiv = document.createElement('div');
         contentDiv.id = 'filter-explanation-content';
-        contentDiv.style.paddingRight = '18px'; // Make room for close button
+        contentDiv.style.paddingRight = '18px';
         infoBox.appendChild(contentDiv);
         
-        // Add to sidebar
         const sidebar = document.querySelector('.sidebar-filters');
         if (sidebar) {
             sidebar.style.position = 'relative';
             sidebar.appendChild(infoBox);
         }
         
-        // Function to update explanation text
         function updateFilterExplanation() {
             const currentType = vendorMapTypeEl.value;
             const expressValue = isExpressFilterEl.value;
             const dualValue = isDualFilterEl.value;
             const ownDeliveryValue = isOwnDeliveryEl.value;
             const ofoodDeliveryValue = isOfoodDeliveryEl.value;
+            const availabilityValue = availabilityMinEl.value;
             
             let explanation = '';
             let showExplanation = false;
             
             switch(currentType) {
                 case 'tapsifood_only':
-                    if (dualValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all') {
+                    if (dualValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all' || availabilityValue.trim()) {
                         explanation = `<b>Tapsifood Only Mode:</b><br>`;
                         if (dualValue === '1') explanation += '• Showing only dual-platform vendors<br>';
                         if (dualValue === '0') explanation += '• Showing only single-platform vendors<br>';
                         if (ownDeliveryValue !== 'all') explanation += `• Own delivery: ${ownDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
                         if (ofoodDeliveryValue !== 'all') explanation += `• oFood delivery: ${ofoodDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
+                        if (availabilityValue.trim()) explanation += `• Availability ≥ ${availabilityValue}<br>`;
                         showExplanation = true;
                     }
                     break;
@@ -537,7 +512,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                     
                 case 'combined_no_overlap':
-                    if (dualValue !== 'all' || expressValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all') {
+                    if (dualValue !== 'all' || expressValue !== 'all' || ownDeliveryValue !== 'all' || ofoodDeliveryValue !== 'all' || availabilityValue.trim()) {
                         explanation = `<b>Combined Mode - Complex Filtering:</b><br>`;
                         if (dualValue === '1') {
                             explanation += '• Dual vendors: Affected by ALL delivery filters<br>';
@@ -556,6 +531,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (ofoodDeliveryValue !== 'all') {
                             explanation += `• oFood delivery (Tapsifood + dual): ${ofoodDeliveryValue === '1' ? 'Yes' : 'No'}<br>`;
                         }
+                        if (availabilityValue.trim()) {
+                            explanation += `• Availability ≥ ${availabilityValue} (Tapsifood + dual)<br>`;
+                        }
                         showExplanation = true;
                     }
                     break;
@@ -569,14 +547,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         
-        // Add event listeners to update explanation when filters change
         vendorMapTypeEl.addEventListener('change', updateFilterExplanation);
         if (isExpressFilterEl) isExpressFilterEl.addEventListener('change', updateFilterExplanation);
         if (isDualFilterEl) isDualFilterEl.addEventListener('change', updateFilterExplanation);
         if (isOwnDeliveryEl) isOwnDeliveryEl.addEventListener('change', updateFilterExplanation);
         if (isOfoodDeliveryEl) isOfoodDeliveryEl.addEventListener('change', updateFilterExplanation);
+        if (availabilityMinEl) availabilityMinEl.addEventListener('input', updateFilterExplanation);
         
-        // Initial update
         setTimeout(updateFilterExplanation, 500);
     }
 
@@ -584,7 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initMap();
         fetchInitialFilterData().then(() => {
             populateCitySelect();
-            populateVendorMapTypeOptions(); // NEW: Populate vendor map type options
+            populateVendorMapTypeOptions();
             initializeCustomDropdowns();
             applyDefaultFilters(); 
             setupEventListeners();
@@ -596,7 +573,6 @@ document.addEventListener('DOMContentLoaded', () => {
             daterangeEndEl.value = today.toISOString().split('T')[0];
             updateVendorIconSize(vendorMarkerSizeEl.value); 
             
-            // Enhanced default heatmap values
             heatmapRadiusEl.value = "25";
             heatmapRadiusValueEl.textContent = "25";
             heatmapBlurEl.value = "15";
@@ -604,12 +580,10 @@ document.addEventListener('DOMContentLoaded', () => {
             heatmapMaxValEl.value = "1.0";
             heatmapMaxValValueEl.textContent = "1.0";
             
-            // Enhanced tooltips
             heatmapRadiusEl.title = "Heatmap point spread radius. Auto-adjusts with zoom when optimized.";
             heatmapBlurEl.title = "Smoothness of heat transitions. Auto-adjusts based on data density.";
             heatmapMaxValEl.title = "Maximum intensity threshold. Auto-optimized to data distribution.";
             
-            // Initialize radius modifier
             vendorRadiusModifierEl.value = "100";
             radiusModifierValueEl.textContent = "100";
             currentRadiusModifier = 1.0;
@@ -618,7 +592,6 @@ document.addEventListener('DOMContentLoaded', () => {
             vendorRadiusFixedEl.value = "3";
             radiusFixedValueEl.textContent = "3";
             
-            // Initialize grid visualization controls
             gridBlurEl.value = "0";
             gridBlurValueEl.textContent = "0";
             gridFadeEl.value = "100";
@@ -631,10 +604,8 @@ document.addEventListener('DOMContentLoaded', () => {
             btnToggleVendors.textContent = vendorsAreVisible ? 'Vendors On' : 'Vendors Off';
             btnToggleVendors.classList.toggle('active', vendorsAreVisible);
             
-            // NEW: Initialize platform-specific filters
             updatePlatformSpecificFilters();
             
-            // Add filter explanation helper
             addFilterExplanationHelper();
             
             fetchAndDisplayMapData();
@@ -651,14 +622,12 @@ document.addEventListener('DOMContentLoaded', () => {
             preferCanvas: true,
             attributionControl: false 
         }).setView([35.7219, 51.3347], 11);
-        // Create dedicated panes to control layer order and clickability
         map.createPane('polygonPane');
         map.getPane('polygonPane').style.zIndex = 450; 
         
         map.createPane('coverageGridPane');
         map.getPane('coverageGridPane').style.zIndex = 460;
         
-        // Use the default shadow pane for radii to ensure they are behind polygons
         map.getPane('shadowPane').style.zIndex = 250;
         L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
             attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com/attributions">CARTO</a>',
@@ -671,12 +640,10 @@ document.addEventListener('DOMContentLoaded', () => {
         coverageGridLayerGroup.addTo(map);
     }
 
-    // Zoom event handler for consistent heatmap rendering
     function setupHeatmapZoomHandler() {
         let zoomTimeout;
         
         map.on('zoomstart', () => {
-            // Clear any pending zoom updates
             if (zoomTimeout) {
                 clearTimeout(zoomTimeout);
             }
@@ -685,11 +652,9 @@ document.addEventListener('DOMContentLoaded', () => {
         map.on('zoomend', () => {
             const newZoomLevel = map.getZoom();
             
-            // Only update if zoom level actually changed significantly
             if (Math.abs(newZoomLevel - currentZoomLevel) >= 0.5) {
                 currentZoomLevel = newZoomLevel;
                 
-                // Debounce the heatmap update
                 if (zoomTimeout) {
                     clearTimeout(zoomTimeout);
                 }
@@ -698,7 +663,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (currentHeatmapType !== 'none' && lastHeatmapData) {
                         renderCurrentHeatmap();
                     }
-                }, 200); // Small delay to ensure smooth zooming
+                }, 200);
             }
         });
     }
@@ -777,7 +742,6 @@ document.addEventListener('DOMContentLoaded', () => {
         let subAreaOptionObjects = [];
         
         if (selectedAreaMainType === "coverage_grid") {
-            // For coverage grid, sub-types should filter the polygons *on top*, not the grid itself
             if (initialFilterData.marketing_areas_by_city && initialFilterData.marketing_areas_by_city[selectedCity]) {
                 subAreaOptionObjects = initialFilterData.marketing_areas_by_city[selectedCity].map(name => ({ value: name, text: decodeURIComponentSafe(name) }));
             }
@@ -906,9 +870,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Additional event listeners for heatmap controls
     function setupAdditionalHeatmapListeners() {
-        // Auto-optimize toggle
         const autoOptimizeBtn = document.getElementById('heatmap-auto-optimize');
         if (autoOptimizeBtn) {
             autoOptimizeBtn.addEventListener('click', () => {
@@ -922,7 +884,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Smooth transitions toggle
         const smoothTransitionsBtn = document.getElementById('heatmap-smooth-transitions');
         if (smoothTransitionsBtn) {
             smoothTransitionsBtn.addEventListener('click', () => {
@@ -932,15 +893,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Reset parameters button
         const resetParamsBtn = document.getElementById('heatmap-reset-params');
         if (resetParamsBtn) {
             resetParamsBtn.addEventListener('click', () => {
-                // Reset to auto-optimize mode
                 heatmapConfig.autoOptimize = true;
                 heatmapConfig.smoothTransitions = true;
                 
-                // Update button states
                 if (autoOptimizeBtn) {
                     autoOptimizeBtn.textContent = 'Auto-Optimize On';
                     autoOptimizeBtn.classList.add('active');
@@ -951,12 +909,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     smoothTransitionsBtn.classList.add('active');
                 }
                 
-                // Reset base configuration
                 heatmapConfig.baseRadius = 25;
                 heatmapConfig.baseBlur = 15;
                 heatmapConfig.maxIntensity = 1.0;
                 
-                // Re-render heatmap with optimal parameters
                 if (currentHeatmapType !== 'none' && lastHeatmapData) {
                     renderCurrentHeatmap();
                 }
@@ -964,25 +920,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Helper function to update radius mode UI
     function updateRadiusModeUI() {
-        // Hide all controls first
         radiusPercentageControl.style.display = 'none';
         radiusFixedControl.style.display = 'none';
         
-        // Show appropriate control based on mode
         if (currentRadiusMode === 'fixed') {
             radiusFixedControl.style.display = 'block';
         } else if (currentRadiusMode === 'percentage') {
             radiusPercentageControl.style.display = 'block';
         }
-        // For 'grade' mode, we don't show either slider control
         
-        // Update the modifier description
         updateRadiusModifierDescription();
     }
 
-    // Helper function to update radius modifier description
     function updateRadiusModifierDescription() {
         const resetBtn = btnResetRadius;
         if (currentRadiusMode === 'grade') {
@@ -1005,22 +955,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         vendorAreaMainTypeEl.addEventListener('change', updateVendorAreaSubTypeFilter);
         
-        // NEW: Multi-platform vendor map type change handler
         vendorMapTypeEl.addEventListener('change', (e) => {
             currentVendorMapType = e.target.value;
             console.log('Vendor map type changed to:', currentVendorMapType);
             updatePlatformSpecificFilters();
             
-            // Update filter explanation helper
             const explanationUpdateEvent = new Event('change');
             setTimeout(() => {
                 if (isExpressFilterEl) isExpressFilterEl.dispatchEvent(explanationUpdateEvent);
             }, 100);
-            
-            // Don't auto-fetch here - let user click Apply Filters button
         });
         
-        // Lat/Lng finder
         btnFindLocation.addEventListener('click', () => {
             const lat = parseFloat(latFinderInputEl.value);
             const lng = parseFloat(lngFinderInputEl.value);
@@ -1032,24 +977,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('Latitude must be between -90 and 90.\nLongitude must be between -180 and 180.');
                 return;
             }
-            // Remove previous temporary marker if it exists
             if (tempLocationMarker) {
                 map.removeLayer(tempLocationMarker);
             }
-            // Fly to the new location with a closer zoom
             map.flyTo([lat, lng], 16);
-            // Add a distinct marker for the found location
             tempLocationMarker = L.circleMarker([lat, lng], {
-                color: '#f44336', // Use a distinct red color
+                color: '#f44336',
                 radius: 10,
                 weight: 3,
                 opacity: 1,
                 fillOpacity: 0.5,
-                pane: 'markerPane' // Ensure it's on top
+                pane: 'markerPane'
             }).bindPopup(`<b>Location</b><br>Lat: ${lat}<br>Lng: ${lng}`).addTo(map).openPopup();
         });
         
-        // Updated map type buttons
         Object.keys(mapTypeButtons).forEach(type => {
             const button = mapTypeButtons[type];
             button.addEventListener('click', () => {
@@ -1106,7 +1047,6 @@ document.addEventListener('DOMContentLoaded', () => {
             redrawVendorRadii();
         });
         
-        // Enhanced radius mode controls with grade-based option
         radiusModeSelector.addEventListener('change', (e) => {
             currentRadiusMode = e.target.value;
             updateRadiusModeUI();
@@ -1124,10 +1064,8 @@ document.addEventListener('DOMContentLoaded', () => {
             currentRadiusFixed = parseFloat(value);
         });
         
-        // Enhanced reset button to handle grade mode
         btnResetRadius.addEventListener('click', () => {
             if (currentRadiusMode === 'grade') {
-                // Switch back to percentage mode when resetting from grade mode
                 radiusModeSelector.value = 'percentage';
                 currentRadiusMode = 'percentage';
                 updateRadiusModeUI();
@@ -1139,10 +1077,9 @@ document.addEventListener('DOMContentLoaded', () => {
             vendorRadiusFixedEl.value = "3";
             radiusFixedValueEl.textContent = "3";
             currentRadiusFixed = 3.0;
-            fetchAndDisplayMapData(); // Re-fetch to apply original radius
+            fetchAndDisplayMapData();
         });
         
-        // Grid visualization controls
         gridBlurEl.addEventListener('input', (e) => {
             gridBlurValueEl.textContent = e.target.value;
             applyGridVisualizationEffects();
@@ -1155,7 +1092,6 @@ document.addEventListener('DOMContentLoaded', () => {
         
         gridPointSizeEl.addEventListener('input', (e) => {
             gridPointSizeValueEl.textContent = e.target.value;
-            // Re-draw grid with new point size
             if (areaMainTypeEl.value === 'coverage_grid') {
                 drawCoverageGrid();
             }
@@ -1186,13 +1122,11 @@ document.addEventListener('DOMContentLoaded', () => {
         areaFillNoneEl.addEventListener('change', restylePolygons);
         vendorMarkerSizeEl.addEventListener('input', (e) => updateVendorIconSize(e.target.value));
         
-        // Enhanced heatmap control event listeners
         heatmapRadiusEl.addEventListener('input', (e) => {
             heatmapRadiusValueEl.textContent = e.target.value;
-            heatmapConfig.autoOptimize = false; // Disable auto-optimize when user adjusts manually
-            heatmapConfig.baseRadius = parseInt(e.target.value); // Update base value
+            heatmapConfig.autoOptimize = false;
+            heatmapConfig.baseRadius = parseInt(e.target.value);
             
-            // Update auto-optimize button state
             const autoOptimizeBtn = document.getElementById('heatmap-auto-optimize');
             if (autoOptimizeBtn) {
                 autoOptimizeBtn.textContent = 'Auto-Optimize Off';
@@ -1230,7 +1164,6 @@ document.addEventListener('DOMContentLoaded', () => {
             renderCurrentHeatmap();
         });
 
-        // Setup additional controls
         setupAdditionalHeatmapListeners();
     }
     
@@ -1252,9 +1185,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Enhanced fetchAndDisplayMapData function with multi-platform support
     async function fetchAndDisplayMapData() {
-        // Clear the temporary marker on new search
         if (tempLocationMarker) {
             map.removeLayer(tempLocationMarker);
             tempLocationMarker = null;
@@ -1265,7 +1196,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedCity = cityEl.value;
         const selectedBLs = getSelectedValuesFromCustomDropdown(customFilterConfigs.businessLine);
 
-        // Enhanced validation for coverage grid to support both Tehran and Mashhad
         if (isCoverageGrid && ['tehran', 'mashhad'].includes(selectedCity)) {
             if (selectedBLs.length !== 1) {
                 showLoading(false);
@@ -1280,7 +1210,6 @@ document.addEventListener('DOMContentLoaded', () => {
         params.append('end_date', daterangeEndEl.value);
         params.append('area_type_display', areaMainTypeEl.value);
         
-        // Add current zoom level to params for backend optimization
         params.append('zoom_level', map.getZoom().toString());
 
         getSelectedValuesFromCustomDropdown(customFilterConfigs.areaSubType)
@@ -1303,7 +1232,6 @@ document.addEventListener('DOMContentLoaded', () => {
         params.append('vendor_is_open', vendorIsOpenEl.value);
         params.append('heatmap_type_request', currentHeatmapType);
         
-        // NEW: Multi-platform vendor parameters
         params.append('vendor_map_type', currentVendorMapType);
         if (isExpressFilterEl.value !== 'all') {
             params.append('is_express', isExpressFilterEl.value);
@@ -1318,14 +1246,17 @@ document.addEventListener('DOMContentLoaded', () => {
             params.append('is_ofood_delivery', isOfoodDeliveryEl.value);
         }
         
-        // Enhanced radius parameters with grade support
+        const availabilityValue = availabilityMinEl.value.trim();
+        if (availabilityValue) {
+            params.append('availability_min', availabilityValue);
+        }
+        
         params.append('radius_mode', currentRadiusMode);
         if (currentRadiusMode === 'fixed') {
             params.append('radius_fixed', currentRadiusFixed);
         } else if (currentRadiusMode === 'percentage') {
             params.append('radius_modifier', currentRadiusModifier);
         }
-        // For grade mode, we just pass the mode - backend will handle the grade-based logic
 
         console.log("Fetching multi-platform map data with params:", params.toString());
         showLoading(true);
@@ -1344,7 +1275,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(`Backend error: ${data.error} - ${data.details || ''}`);
             }
 
-            // Log multi-platform response data
             console.log('Multi-platform response received:', {
                 vendors: data.vendors?.length || 0,
                 heatmapPoints: data.heatmap_data?.length || 0,
@@ -1358,7 +1288,6 @@ document.addEventListener('DOMContentLoaded', () => {
             lastHeatmapData = data.heatmap_data || null;
             allCoverageGridData = data.coverage_grid || [];
 
-            // Debug logging for heatmap data
             if (lastHeatmapData && lastHeatmapData.length > 0) {
                 console.log(`Received ${lastHeatmapData.length} heatmap points for type: ${currentHeatmapType}`);
                 const values = lastHeatmapData.map(p => p.value).filter(v => v != null);
@@ -1397,7 +1326,6 @@ document.addEventListener('DOMContentLoaded', () => {
         updateLayerOrder();
     }
     
-    // Enhanced renderCurrentHeatmap function
     function renderCurrentHeatmap() {
         if (heatmapLayer) {
             map.removeLayer(heatmapLayer);
@@ -1408,7 +1336,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Filter out invalid data points
         const validData = lastHeatmapData.filter(p => 
             p.lat != null && p.lng != null && p.value != null && 
             !isNaN(p.lat) && !isNaN(p.lng) && !isNaN(p.value) &&
@@ -1422,26 +1349,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         currentZoomLevel = map.getZoom();
         
-        // Get optimized parameters
         const optimalParams = heatmapConfig.autoOptimize ? 
             calculateOptimalHeatmapParams(validData, currentZoomLevel) : 
             getZoomAdjustedHeatmapOptions();
 
         lastOptimalParams = optimalParams;
 
-        // Update UI to show optimal parameters
         if (heatmapConfig.autoOptimize) {
             updateHeatmapControlsDisplay(optimalParams);
         }
 
-        // Prepare heatmap data with proper intensity scaling
         const heatPoints = validData.map(p => {
-            // Ensure values are properly scaled for the heatmap
             const intensity = Math.max(0.1, Math.min(100, p.value)) / 100;
             return [p.lat, p.lng, intensity];
         });
 
-        // Enhanced heatmap options
         let heatOptions = {
             radius: optimalParams.radius,
             blur: optimalParams.blur,
@@ -1451,7 +1373,6 @@ document.addEventListener('DOMContentLoaded', () => {
             pane: 'overlayPane'
         };
 
-        // Enhanced gradients for different heatmap types
         if (currentHeatmapType === 'order_density') {
             heatOptions.gradient = {
                 0.0: 'rgba(0, 0, 255, 0)',
@@ -1489,7 +1410,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 1.0: 'rgba(255, 100, 0, 1)'
             };
         } else {
-            // Default gradient for population and others
             heatOptions.gradient = {
                 0.0: 'rgba(0, 0, 255, 0)',
                 0.25: 'rgba(0, 255, 255, 0.6)',
@@ -1503,7 +1423,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         heatmapLayer = L.heatLayer(heatPoints, heatOptions).addTo(map);
 
-        // Make heatmap non-interactive
         if (heatmapLayer && heatmapLayer.getPane()) {
             heatmapLayer.getPane().style.pointerEvents = 'none';
         }
@@ -1513,7 +1432,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const blur = gridBlurEl.value;
         const fade = gridFadeEl.value / 100;
         
-        // Apply CSS filter to the coverage grid pane
         const coveragePane = map.getPane('coverageGridPane');
         if (coveragePane) {
             coveragePane.style.filter = `blur(${blur}px)`;
@@ -1523,11 +1441,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function updateLayerOrder() {
         if (marketingAreasOnTop) {
-            // Move marketing areas (polygons) on top of grid
             map.getPane('polygonPane').style.zIndex = 470;
             map.getPane('coverageGridPane').style.zIndex = 460;
         } else {
-            // Default order - grid on top of polygons
             map.getPane('polygonPane').style.zIndex = 450;
             map.getPane('coverageGridPane').style.zIndex = 460;
         }
@@ -1539,36 +1455,33 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
-        // Get current grid point size
         const gridPointSize = parseInt(gridPointSizeEl.value) || 6;
         
         allCoverageGridData.forEach(point => {
-            let color = '#808080'; // Default to neutral grey
+            let color = '#808080';
             let popupContent = `<b>Coverage at (${point.lat.toFixed(4)}, ${point.lng.toFixed(4)})</b><br>`;
             if (point.marketing_area) {
                 popupContent += `<b>Marketing Area:</b> ${decodeURIComponentSafe(point.marketing_area)}<br>`;
             }
             if (point.target_business_line && point.target_value != null) {
                 const { actual_value, target_value, performance_ratio } = point;
-                // Coloring logic based on performance ratio (actual / target)
                 if (actual_value === 0) {
-                    color = '#d3d3d3'; // Light Grey (Zero Coverage)
+                    color = '#d3d3d3';
                 } else if (performance_ratio >= 1.2) {
-                    color = '#004d00'; // Darker Green (Exceeds Target by 20%+)
+                    color = '#004d00';
                 } else if (performance_ratio >= 1.0) {
-                    color = '#00FF00'; // Bright Green (Meets or slightly exceeds Target)
+                    color = '#00FF00';
                 } else if (performance_ratio >= 0.8) {
-                    color = '#ffff00'; // Yellow (Good, 80%-99%)
+                    color = '#ffff00';
                 } else if (performance_ratio >= 0.6) {
-                    color = '#ff9900'; // Orange (Okay, 60%-79%)
+                    color = '#ff9900';
                 } else if (performance_ratio >= 0.4) {
-                    color = '#ff0000'; // Red (Poor, 40%-59%)
+                    color = '#ff0000';
                 } else if (performance_ratio >= 0.2) {
-                    color = '#8B0000'; // Dark Red (Very Poor, 20%-39%)
+                    color = '#8B0000';
                 } else {
-                    color = '#000000'; // Black (Extremely Poor, <20%)
+                    color = '#000000';
                 }
-                // Build a detailed popup for target-based analysis
                 popupContent += `<hr style="margin: 4px 0;"><b>Target Analysis (${point.target_business_line})</b><br>`;
                 popupContent += `<b>Target Count:</b> ${target_value}<br>`;
                 popupContent += `<b>Actual Count:</b> ${actual_value}<br>`;
@@ -1577,13 +1490,12 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 popupContent += `<br><i>No target data found for this Business Line in this area.</i>`;
             }
-            // Add general coverage details to all popups
             const coverage = point.coverage;
             popupContent += `<hr style="margin: 4px 0;"><b>Total Covering Vendors:</b> ${coverage.total_vendors}<br>`;
             if (coverage.by_business_line && Object.keys(coverage.by_business_line).length > 0) {
                 popupContent += '<b>By Business Line:</b><br>';
                 Object.entries(coverage.by_business_line)
-                    .sort((a, b) => b[1] - a[1]) // Sort by count descending
+                    .sort((a, b) => b[1] - a[1])
                     .forEach(([bl, count]) => {
                         popupContent += `  ${bl}: ${count}<br>`;
                     });
@@ -1641,7 +1553,6 @@ document.addEventListener('DOMContentLoaded', () => {
         allVendorsData.forEach(vendor => {
             if (vendor.latitude == null || vendor.longitude == null) return; 
             
-            // Enhanced popup content with multi-platform information
             let popupContent = `<b>${vendor.vendor_name || 'N/A'}</b><br>
                                 Code: ${vendor.vendor_code || 'N/A'}<br>
                                 Platform: ${vendor.vendor_source ? vendor.vendor_source.toUpperCase() : 'N/A'}<br>
@@ -1650,26 +1561,32 @@ document.addEventListener('DOMContentLoaded', () => {
                                 Visible: ${vendor.visible == 1 ? 'Yes' : (vendor.visible == 0 ? 'No' : 'N/A')}<br>
                                 Open: ${vendor.open == 1 ? 'Yes' : (vendor.open == 0 ? 'No' : 'N/A')}<br>`;
             
-            // Add dual platform information
             if (vendor.is_dual !== undefined) {
                 popupContent += `Dual Platform: ${vendor.is_dual == 1 ? 'Yes' : 'No'}<br>`;
             }
             
-            // Add Snappfood-specific information
             if (vendor.vendor_source === 'snappfood' && vendor.is_express !== undefined) {
                 popupContent += `Express Delivery: ${vendor.is_express == 1 ? 'Yes' : 'No'}<br>`;
             }
             
-            // Add Tapsifood delivery type information
             if (vendor.vendor_source === 'tapsifood') {
                 let deliveryTypes = [];
                 if (vendor.ofood_delivery == 1) deliveryTypes.push('oFood');
                 if (vendor.own_delivery == 1) deliveryTypes.push('Own');
                 const deliveryText = deliveryTypes.length > 0 ? deliveryTypes.join(' + ') : 'None';
                 popupContent += `Delivery: ${deliveryText}<br>`;
+                
+                if (vendor.availability !== null && vendor.availability !== undefined) {
+                    popupContent += `Availability: ${(vendor.availability * 100).toFixed(1)}%<br>`;
+                }
+                if (vendor.availability_H !== null && vendor.availability_H !== undefined) {
+                    popupContent += `Availability Hours: ${vendor.availability_H}<br>`;
+                }
+                if (vendor.shift_H !== null && vendor.shift_H !== undefined) {
+                    popupContent += `Shift Hours: ${vendor.shift_H}<br>`;
+                }
             }
             
-            // Show radius with mode information
             if (vendor.radius) {
                 popupContent += `Radius: ${vendor.radius.toFixed(2)} km`;
                 if (currentRadiusMode === 'grade') {
@@ -1684,16 +1601,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 popupContent += `Radius: N/A<br>`;
             }
             
-            // Create platform-specific markers with different colors
-            let markerColor = vendor.vendor_source === 'snappfood' ? '#FF6B35' : '#2979FF'; // Orange for Snappfood, Blue for Tapsifood
+            let markerColor = vendor.vendor_source === 'snappfood' ? '#FF6B35' : '#2979FF';
             if (vendor.is_dual == 1) {
-                markerColor = '#9C27B0'; // Purple for dual vendors
+                markerColor = '#9C27B0';
             }
             
-            // Use different marker styles based on platform
             let marker;
             if (vendor.vendor_source === 'snappfood') {
-                // Different icon for Snappfood vendors
                 const snappfoodIcon = L.divIcon({
                     className: 'snappfood-marker',
                     html: `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
@@ -1702,7 +1616,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 marker = L.marker([vendor.latitude, vendor.longitude], {icon: snappfoodIcon});
             } else {
-                // Use default icon for Tapsifood vendors
                 marker = L.marker([vendor.latitude, vendor.longitude], {icon: defaultVendorIcon});
             }
             
@@ -1713,7 +1626,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function redrawVendorRadii() {
-        // Remove existing circles
         const circles = [];
         vendorLayerGroup.eachLayer(layer => {
             if (layer instanceof L.Circle) {
@@ -1728,12 +1640,12 @@ document.addEventListener('DOMContentLoaded', () => {
         allVendorsData.forEach(vendor => {
             if (vendor.latitude != null && vendor.longitude != null && vendor.radius > 0) {
                  L.circle([vendor.latitude, vendor.longitude], {
-                    radius: vendor.radius * 1000, // radius is already modified by backend
+                    radius: vendor.radius * 1000,
                     color: rEdgeColor, 
                     fillColor: rInnerColor, 
                     fillOpacity: rInnerIsNone ? 0 : 0.25, 
                     weight: 1.5,
-                    pane: 'shadowPane' // Render circles behind markers AND polygons
+                    pane: 'shadowPane'
                 }).addTo(vendorLayerGroup); 
             }
         });
@@ -1764,7 +1676,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const nameCand = p.name || p.NAME || p.Name || p.Region || p.REGION_N || p.NAME_1 || p.NAME_2 || p.district || p.NAME_MAHAL;
                     const name = decodeURIComponentSafe(nameCand) || "Area Detail";
                     popupContent += `<b>${name}</b>`;
-                    // Population Data Section (for Tehran districts)
                     if (p.Pop != null || p.PopDensity != null) {
                         popupContent += `<br><hr style="margin: 5px 0; border-color: #eee;"><em>Population Stats:</em>`;
                         if (p.Pop != null) {
@@ -1775,16 +1686,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                     
-                    // Filter-Based Data Section (applies to all polygon types)
                     if (p.vendor_count != null || p.unique_user_count != null) {
                         popupContent += `<br><hr style="margin: 5px 0; border-color: #eee;"><em>Metrics (${currentVendorMapType}):</em>`;
                         
-                        // Vendor Metrics
                         if (p.vendor_count != null) {
                              popupContent += `<br><b>Total Filtered Vendors:</b> ${p.vendor_count}`;
                         }
                         
-                        // Add platform source breakdown
                         if (p.source_counts && Object.keys(p.source_counts).length > 0) {
                             popupContent += `<br><b>- By Platform:</b> `;
                             const sourceStrings = Object.entries(p.source_counts)
@@ -1796,14 +1704,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (p.grade_counts && Object.keys(p.grade_counts).length > 0) {
                             popupContent += `<br><b>- By Grade:</b> `;
                             const gradeStrings = Object.entries(p.grade_counts)
-                                                      .sort((a, b) => b[1] - a[1]) // Sort by count desc
+                                                      .sort((a, b) => b[1] - a[1])
                                                       .map(([grade, count]) => `${grade}: ${count}`);
                             popupContent += gradeStrings.join(', ');
                         }
                         if (p.vendor_per_10k_pop != null) {
                             popupContent += `<br><b>- Vendors per 10k Pop:</b> ${Number(p.vendor_per_10k_pop).toFixed(2)}`;
                         }
-                        // Customer Metrics
                         if (p.unique_user_count != null) {
                              popupContent += `<br><b>Unique Customers (date range):</b> ${p.unique_user_count.toLocaleString()}`;
                         }
@@ -1811,7 +1718,6 @@ document.addEventListener('DOMContentLoaded', () => {
                              popupContent += `<br><b>Unique Customers (all time):</b> ${p.total_unique_user_count.toLocaleString()}`;
                         }
                     } else if (Object.keys(p).length <= 4) {
-                         // Don't show the "Metrics" header if there are no metrics to display.
                     }
                 } else {
                     popupContent = '<b>Area</b>';
@@ -1821,10 +1727,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }).addTo(polygonLayerGroup);
     }
 
-    // Initialize the application
     init();
     
-    // Initialize radius mode UI after DOM is ready
     document.addEventListener('DOMContentLoaded', () => {
         updateRadiusModeUI();
     });

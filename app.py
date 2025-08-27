@@ -30,10 +30,12 @@ from config import (
     PAGE_SIZE,
     CACHE_SIZE,
     city_boundaries,
+    # NEW: Multi-platform vendor settings
     SF_VENDORS_CSV_PATH,
     GRADED_CSV_PATH,
     DEFAULT_VENDOR_MAP_TYPE,
     VENDOR_MAP_TYPES,
+    # AUTO-refresh configuration
     ENABLE_AUTO_REFRESH,
     VENDOR_REFRESH_INTERVAL_MINUTES,
     ORDER_REFRESH_INTERVAL_MINUTES,
@@ -42,51 +44,59 @@ from config import (
     AUTO_REFRESH_RETRY_DELAY_SECONDS,
 )
 
+# --- Configuration ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(BASE_DIR, 'src')
 PUBLIC_DIR = os.path.join(BASE_DIR, 'public')
 
+# Setup logging for auto-refresh
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Initialize Flask App ---
 app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path='')
 CORS(app)
 
-app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600
-app.config['JSON_SORT_KEYS'] = False
+# Enable response compression
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600  # Cache static files for 1 hour
+app.config['JSON_SORT_KEYS'] = False  # Don't sort JSON keys for slightly faster response
 
+# --- Global Data Variables ---
 df_orders = None
-df_vendors_tapsifood = None
-df_vendors_snappfood = None
-df_graded_enhanced = None
-df_vendors_unified = None
-current_vendor_map_type = DEFAULT_VENDOR_MAP_TYPE
+# NEW: Multi-platform vendor data structures
+df_vendors_tapsifood = None  # Metabase vendors (original)
+df_vendors_snappfood = None  # sf_vendors.csv 
+df_graded_enhanced = None    # Enhanced graded.csv with dual mapping
+df_vendors_unified = None    # Currently active vendor dataset
+current_vendor_map_type = DEFAULT_VENDOR_MAP_TYPE  # Track current vendor display mode
 
 gdf_marketing_areas = {}
 gdf_tehran_region = None
 gdf_tehran_main_districts = None
 df_coverage_targets = None
-target_lookup_dict = {}
+target_lookup_dict = {}    # --- MODIFIED: Will use area_id ---
 city_id_map = {1: "mashhad", 2: "tehran", 5: "shiraz"}
 city_name_to_id_map = {v: k for k, v in city_id_map.items()}
 
+# NEW: Grade-based radius mapping
 GRADE_RADIUS_MAPPING = {
-    'A+': 4.1,      
-    'A': 4.0,       
-    'A-': 4.0,      
-    'B': 3.5,       
-    'B-': 3.5,      
-    'C': 3.0,       
-    'C-': 3.0,      
-    'D': 2.0,       
-    'D-': 2.0,      
-    'E': 1.5,       
-    'E-': 1.5,      
-    'F': 1.0,       
-    'Not Enough Rate': 1.5,
-    'Ungraded': 1.5
+    'A+': 4.1,      # > 4km
+    'A': 4.0,       # = 4km
+    'A-': 4.0,      # = 4km
+    'B': 3.5,       # = 3.5km
+    'B-': 3.5,      # = 3.5km
+    'C': 3.0,       # = 3km
+    'C-': 3.0,      # = 3km
+    'D': 2.0,       # = 2km
+    'D-': 2.0,      # = 2km
+    'E': 1.5,       # = 1.5km
+    'E-': 1.5,      # = 1.5km
+    'F': 1.0,       # = 1km
+    'Not Enough Rate': 1.5,  # = 1.5km
+    'Ungraded': 1.5  # = 1.5km (default for missing grades)
 }
 
+# NEW: Thread safety for auto-refresh
 data_lock = threading.Lock()
 refresh_threads = {}
 refresh_stats = {
@@ -99,9 +109,19 @@ refresh_stats = {
     'refresh_active': False
 }
 
+# Simple cache for coverage calculations
+# In-memory cache for coverage calculations. The maximum size is configured
+# in ``config.py`` via ``CACHE_SIZE`` to avoid unbounded memory growth.
 coverage_cache = {}
 
+# ``city_boundaries`` used by the coverage grid is imported from ``config``.
+
+# --- Helper Functions ---
+
 def clean_data_for_json(data):
+    """
+    Recursively clean data to replace NaN, inf, and other non-JSON-serializable values with None.
+    """
     if isinstance(data, dict):
         return {key: clean_data_for_json(value) for key, value in data.items()}
     elif isinstance(data, list):
@@ -110,9 +130,9 @@ def clean_data_for_json(data):
         if math.isnan(data) or math.isinf(data):
             return None
         return data
-    elif pd.isna(data):
+    elif pd.isna(data):  # Handles pandas NaN, NaT, etc.
         return None
-    elif hasattr(data, 'item'):
+    elif hasattr(data, 'item'):  # Handle numpy scalars
         item_val = data.item()
         if isinstance(item_val, float) and (math.isnan(item_val) or math.isinf(item_val)):
             return None
@@ -121,6 +141,9 @@ def clean_data_for_json(data):
         return data
 
 def safe_numeric_conversion(series, default_value=None):
+    """
+    Safely convert a series to numeric, replacing any problematic values with default_value.
+    """
     converted = pd.to_numeric(series, errors='coerce')
     if default_value is not None:
         converted = converted.fillna(default_value)
@@ -135,19 +158,26 @@ def safe_tolist(series):
     return cleaned.tolist()
 
 def optimize_dataframe_memory(df):
+    """
+    Optimize DataFrame memory usage by converting appropriate columns to categories
+    and downcasting numeric types.
+    """
     if df is None or df.empty:
         return df
     
     original_memory = df.memory_usage(deep=True).sum() / 1024**2
     
+    # Convert object columns to category where appropriate
     for col in df.columns:
         if df[col].dtype == 'object':
+            # Convert to category if less than 50% unique values
             if df[col].nunique() / len(df) < 0.5:
                 try:
                     df[col] = df[col].astype('category')
                 except Exception:
-                    pass
+                    pass  # Skip if conversion fails
     
+    # Downcast numeric types
     for col in df.select_dtypes(include=['int64']).columns:
         try:
             df[col] = pd.to_numeric(df[col], downcast='integer')
@@ -169,15 +199,20 @@ def optimize_dataframe_memory(df):
     return df
 
 def apply_grade_based_radius(df_vendors):
+    """
+    NEW: Apply grade-based radius to vendors based on their grades.
+    """
     if df_vendors is None or df_vendors.empty:
         return df_vendors
     
     df_copy = df_vendors.copy()
     
+    # Ensure grade column exists
     if 'grade' not in df_copy.columns:
         print("Warning: No grade column found, cannot apply grade-based radius")
         return df_copy
     
+    # Apply grade-based radius mapping
     def get_radius_for_grade(grade):
         if pd.isna(grade) or grade is None:
             return GRADE_RADIUS_MAPPING.get('Ungraded', 1.5)
@@ -186,6 +221,7 @@ def apply_grade_based_radius(df_vendors):
     
     df_copy['radius'] = df_copy['grade'].apply(get_radius_for_grade)
     
+    # Log the radius assignment statistics
     radius_stats = df_copy.groupby('grade')['radius'].agg(['count', 'mean']).fillna(0)
     print(f"📏 Grade-based radius applied:")
     for grade, stats in radius_stats.iterrows():
@@ -195,7 +231,12 @@ def apply_grade_based_radius(df_vendors):
     
     return df_copy
 
+# NEW: Multi-platform vendor processing functions
+
 def load_snappfood_vendors():
+    """
+    Load Snappfood vendors from sf_vendors.csv
+    """
     print(f"📊 Loading Snappfood vendors from {SF_VENDORS_CSV_PATH}...")
     
     try:
@@ -203,6 +244,7 @@ def load_snappfood_vendors():
             print(f"❌ Snappfood vendors file not found: {SF_VENDORS_CSV_PATH}")
             return pd.DataFrame()
         
+        # Load CSV with optimized dtypes
         sf_vendor_dtype = {
             'vendor_code': 'str',
             'vendor_name': 'str', 
@@ -212,7 +254,7 @@ def load_snappfood_vendors():
             'longitude': 'float32',
             'is_express': 'int8',
             'status_id': 'Int64',
-            'radius': 'int32',
+            'radius': 'int32',  # Will be set to 0, grade-based will apply
             'visible': 'int8',
             'open': 'int8'
         }
@@ -221,14 +263,17 @@ def load_snappfood_vendors():
         df_sf['business_line'] = df_sf['business_line'].astype('string')
         df_sf = optimize_dataframe_memory(df_sf)
         
+        # Add platform identifier and city name mapping
         df_sf['vendor_source'] = 'snappfood'
         df_sf['city_name'] = df_sf['city_id'].map(city_id_map).astype('category')
         
-        df_sf['ofood_delivery'] = 0
-        df_sf['own_delivery'] = 1
+        # Initialize columns for compatibility with Tapsifood structure
+        df_sf['ofood_delivery'] = 0  # Snappfood vendors don't have oFood delivery
+        df_sf['own_delivery'] = 1    # Assume all Snappfood vendors have own delivery
         
         print(f"✅ Snappfood vendors loaded: {len(df_sf)} vendors")
         
+        # Log city distribution
         city_dist = df_sf['city_name'].value_counts()
         for city, count in city_dist.items():
             print(f"   📍 {city}: {count:,} vendors")
@@ -240,6 +285,9 @@ def load_snappfood_vendors():
         return pd.DataFrame()
 
 def load_enhanced_graded_data():
+    """
+    Load enhanced graded.csv with dual vendor mapping
+    """
     print(f"📊 Loading enhanced graded data from {GRADED_CSV_PATH}...")
     
     try:
@@ -247,6 +295,7 @@ def load_enhanced_graded_data():
             print(f"❌ Enhanced graded file not found: {GRADED_CSV_PATH}")
             return pd.DataFrame()
         
+        # Load enhanced graded CSV
         graded_dtype = {
             'sf_vendor_code': 'str',
             'sf_vendor_name': 'str',
@@ -254,13 +303,14 @@ def load_enhanced_graded_data():
             'business_line': 'category',
             'grade': 'category',
             'is_dual': 'int8',
-            'tf_vendor_code': 'str',
-            'tf_vendor_nam': 'str'
+            'tf_vendor_code': 'str',  # Nullable for non-dual vendors
+            'tf_vendor_nam': 'str'    # Nullable for non-dual vendors  
         }
         
         df_graded = pd.read_csv(GRADED_CSV_PATH, dtype=graded_dtype)
         df_graded = optimize_dataframe_memory(df_graded)
         
+        # Log dual vendor statistics
         total_vendors = len(df_graded)
         dual_vendors = len(df_graded[df_graded['is_dual'] == 1])
         snappfood_only = total_vendors - dual_vendors
@@ -269,6 +319,7 @@ def load_enhanced_graded_data():
         print(f"   🔗 Dual vendors (both platforms): {dual_vendors:,}")
         print(f"   📱 Snappfood only: {snappfood_only:,}")
         
+        # Log grade distribution
         grade_dist = df_graded['grade'].value_counts().head(10)
         print(f"   📊 Top grades: {grade_dist.to_dict()}")
         
@@ -279,6 +330,9 @@ def load_enhanced_graded_data():
         return pd.DataFrame()
 
 def create_unified_vendor_dataset(vendor_map_type="tapsifood_only"):
+    """
+    Create unified vendor dataset based on the specified vendor map type
+    """
     global df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced
     
     print(f"🔄 Creating unified vendor dataset for type: {vendor_map_type}")
@@ -296,6 +350,9 @@ def create_unified_vendor_dataset(vendor_map_type="tapsifood_only"):
         return create_tapsifood_only_dataset()
 
 def create_tapsifood_only_dataset():
+    """
+    Create Tapsifood-only vendor dataset (original behavior)
+    """
     global df_vendors_tapsifood, df_graded_enhanced
     
     if df_vendors_tapsifood is None or df_vendors_tapsifood.empty:
@@ -304,11 +361,15 @@ def create_tapsifood_only_dataset():
     
     df_result = df_vendors_tapsifood.copy()
     
+    # Apply grading using enhanced graded data
     if df_graded_enhanced is not None and not df_graded_enhanced.empty:
+        # Create mapping from tf_vendor_code to grade for dual vendors
         dual_mapping = df_graded_enhanced[df_graded_enhanced['is_dual'] == 1].set_index('tf_vendor_code')['grade'].to_dict()
         
+        # Apply grades
         df_result['grade'] = df_result['vendor_code'].map(dual_mapping).fillna('Ungraded').astype('category')
         
+        # Add is_dual information 
         df_result['is_dual'] = df_result['vendor_code'].map(
             df_graded_enhanced[df_graded_enhanced['is_dual'] == 1].set_index('tf_vendor_code')['is_dual'].to_dict()
         ).fillna(0).astype('int8')
@@ -319,13 +380,18 @@ def create_tapsifood_only_dataset():
         df_result['grade'] = pd.Categorical(['Ungraded'] * len(df_result))
         df_result['is_dual'] = 0
     
+    # Add platform identifier
     df_result['vendor_source'] = 'tapsifood'
     
-    df_result['is_express'] = 0
+    # Initialize Snappfood-specific fields for compatibility
+    df_result['is_express'] = 0  # Tapsifood vendors don't have express
     
     return df_result
 
 def create_all_snappfood_dataset():
+    """
+    Create dataset with all Snappfood vendors
+    """
     global df_vendors_snappfood, df_graded_enhanced
     
     if df_vendors_snappfood is None or df_vendors_snappfood.empty:
@@ -334,10 +400,13 @@ def create_all_snappfood_dataset():
     
     df_result = df_vendors_snappfood.copy()
     
+    # Apply grading using enhanced graded data
     if df_graded_enhanced is not None and not df_graded_enhanced.empty:
+        # Create mapping from sf_vendor_code to grade and is_dual
         grade_mapping = df_graded_enhanced.set_index('sf_vendor_code')['grade'].to_dict()
         dual_mapping = df_graded_enhanced.set_index('sf_vendor_code')['is_dual'].to_dict()
         
+        # Apply mappings
         df_result['grade'] = df_result['vendor_code'].map(grade_mapping).fillna('Ungraded').astype('category') 
         df_result['is_dual'] = df_result['vendor_code'].map(dual_mapping).fillna(0).astype('int8')
         
@@ -351,6 +420,9 @@ def create_all_snappfood_dataset():
     return df_result
 
 def create_snappfood_exclude_tapsifood_dataset():
+    """
+    Create dataset with Snappfood vendors excluding those in Tapsifood
+    """
     global df_vendors_snappfood, df_graded_enhanced
     
     if df_vendors_snappfood is None or df_vendors_snappfood.empty:
@@ -359,6 +431,7 @@ def create_snappfood_exclude_tapsifood_dataset():
     
     df_result = df_vendors_snappfood.copy()
     
+    # Apply grading first
     if df_graded_enhanced is not None and not df_graded_enhanced.empty:
         grade_mapping = df_graded_enhanced.set_index('sf_vendor_code')['grade'].to_dict()
         dual_mapping = df_graded_enhanced.set_index('sf_vendor_code')['is_dual'].to_dict()
@@ -366,6 +439,7 @@ def create_snappfood_exclude_tapsifood_dataset():
         df_result['grade'] = df_result['vendor_code'].map(grade_mapping).fillna('Ungraded').astype('category')
         df_result['is_dual'] = df_result['vendor_code'].map(dual_mapping).fillna(0).astype('int8')
         
+        # Filter out dual vendors (exclude Tapsifood)
         df_result = df_result[df_result['is_dual'] == 0].copy()
         
         print(f"   ✅ Snappfood exclude Tapsifood: {len(df_result):,} vendors")
@@ -376,6 +450,9 @@ def create_snappfood_exclude_tapsifood_dataset():
     return df_result
 
 def create_combined_no_overlap_dataset():
+    """
+    Create combined dataset: Tapsifood + Snappfood (excluding dual vendors)
+    """
     df_tapsifood = create_tapsifood_only_dataset()
     df_snappfood_only = create_snappfood_exclude_tapsifood_dataset()
     
@@ -383,6 +460,7 @@ def create_combined_no_overlap_dataset():
         print("❌ No vendor data available for combined dataset")
         return pd.DataFrame()
     
+    # Combine datasets
     if not df_tapsifood.empty and not df_snappfood_only.empty:
         df_combined = pd.concat([df_tapsifood, df_snappfood_only], ignore_index=True)
     elif not df_tapsifood.empty:
@@ -427,12 +505,13 @@ def get_district_names_from_gdf(gdf, default_prefix="District"):
     for col in name_cols:
         if col in gdf.columns and gdf[col].dtype == 'object':
             return sorted(safe_tolist(gdf[col].astype(str)))
-    for col in gdf.columns:
+    for col in gdf.columns: # Fallback
         if col != 'geometry' and gdf[col].dtype == 'object':
             return sorted(safe_tolist(gdf[col].astype(str)))
     return [f"{default_prefix} {i+1}" for i in range(len(gdf))]
 
 def generate_random_points_in_polygon(poly, num_points):
+    """Generates a specified number of random points within a given Shapely polygon."""
     points = []
     min_x, min_y, max_x, max_y = poly.bounds
     while len(points) < num_points:
@@ -442,11 +521,14 @@ def generate_random_points_in_polygon(poly, num_points):
     return points
 
 def generate_coverage_grid(city_name, grid_size_meters=200):
+    """Generate a grid of points for coverage analysis."""
     if city_name not in city_boundaries:
         return []
     
     bounds = city_boundaries[city_name]
     
+    # Convert grid size from meters to approximate degrees
+    # At these latitudes, 1 degree ≈ 111 km
     grid_size_deg = grid_size_meters / 111000.0
     
     grid_points = []
@@ -461,20 +543,27 @@ def generate_coverage_grid(city_name, grid_size_meters=200):
     return grid_points
 
 def calculate_coverage_for_grid_vectorized(grid_points, df_vendors_filtered, city_name):
+    """
+    Calculate vendor coverage for all grid points using vectorized operations.
+    Much faster than calculating point by point.
+    """
     if df_vendors_filtered.empty or not grid_points:
         return []
     
+    # Filter vendors with valid data
     valid_vendors = df_vendors_filtered.dropna(subset=['latitude', 'longitude', 'radius'])
     if valid_vendors.empty:
         return []
     
+    # Convert to numpy arrays for faster computation
     grid_lats = np.array([p['lat'] for p in grid_points])
     grid_lngs = np.array([p['lng'] for p in grid_points])
     
     vendor_lats = valid_vendors['latitude'].values
     vendor_lngs = valid_vendors['longitude'].values
-    vendor_radii = valid_vendors['radius'].values * 1000
+    vendor_radii = valid_vendors['radius'].values * 1000  # Convert km to meters
     
+    # Pre-extract vendor attributes
     if 'business_line' in valid_vendors and isinstance(valid_vendors['business_line'].dtype, pd.CategoricalDtype):
         vendor_business_lines = valid_vendors['business_line'].cat.add_categories(['Unknown']).fillna('Unknown').values
     else:
@@ -486,19 +575,25 @@ def calculate_coverage_for_grid_vectorized(grid_points, df_vendors_filtered, cit
     
     coverage_results = []
     
+    # Process in batches to avoid memory issues
     batch_size = 100
     for i in range(0, len(grid_points), batch_size):
         batch_end = min(i + batch_size, len(grid_points))
         batch_lats = grid_lats[i:batch_end]
         batch_lngs = grid_lngs[i:batch_end]
         
+        # Vectorized distance calculation for the batch
+        # Using broadcasting to calculate distances from all batch points to all vendors
         lat_diff = batch_lats[:, np.newaxis] - vendor_lats[np.newaxis, :]
         lng_diff = batch_lngs[:, np.newaxis] - vendor_lngs[np.newaxis, :]
         
+        # Approximate distance in meters (good enough for our scale)
         distances_meters = np.sqrt((lat_diff * 111000)**2 + (lng_diff * 111000 * np.cos(np.radians(batch_lats[:, np.newaxis])))**2)
         
+        # Check which vendors cover each point
         coverage_matrix = distances_meters <= vendor_radii[np.newaxis, :]
         
+        # Process results for each point in batch
         for j, point_idx in enumerate(range(i, batch_end)):
             covering_vendors = np.where(coverage_matrix[j])[0]
             
@@ -511,6 +606,7 @@ def calculate_coverage_for_grid_vectorized(grid_points, df_vendors_filtered, cit
             }
             
             if len(covering_vendors) > 0:
+                # Count by business line
                 if vendor_business_lines is not None:
                     bl_counts = {}
                     for vendor_idx in covering_vendors:
@@ -518,6 +614,7 @@ def calculate_coverage_for_grid_vectorized(grid_points, df_vendors_filtered, cit
                         bl_counts[bl] = bl_counts.get(bl, 0) + 1
                     coverage_data["by_business_line"] = bl_counts
                 
+                # Count by grade
                 if vendor_grades is not None:
                     grade_counts = {}
                     for vendor_idx in covering_vendors:
@@ -530,6 +627,10 @@ def calculate_coverage_for_grid_vectorized(grid_points, df_vendors_filtered, cit
     return coverage_results
 
 def find_marketing_area_for_points(points, city_name):
+    """
+    Find which marketing area each point belongs to.
+    --- FIXED: Correctly uses STRtree for efficient point-in-polygon queries. ---
+    """
     if city_name not in gdf_marketing_areas or gdf_marketing_areas[city_name].empty:
         return [(None, None)] * len(points)
     gdf_areas = gdf_marketing_areas[city_name]
@@ -539,20 +640,27 @@ def find_marketing_area_for_points(points, city_name):
         area_geoms = gdf_areas.geometry.values
         area_ids = gdf_areas['area_id'].values if 'area_id' in gdf_areas else [None] * len(gdf_areas)
         area_names = gdf_areas['name'].values if 'name' in gdf_areas else [None] * len(gdf_areas)
+        # Create the spatial index from the polygon geometries
         tree = STRtree(area_geoms)
         for point in points:
             point_geom = Point(point['lng'], point['lat'])
+            # Step 1: Query the tree to find candidate polygons (fast BBOX intersection)
+            # This returns indices of geometries whose bounding boxes intersect the point's bounding box.
             candidate_indices = tree.query(point_geom)
             found_area = False
+            # Step 2: Iterate through only the candidates and perform the exact 'contains' check
             for idx in candidate_indices:
                 candidate_poly = area_geoms[idx]
                 if candidate_poly.contains(point_geom):
+                    # Found a match!
                     results.append((area_ids[idx], area_names[idx]))
                     found_area = True
-                    break
+                    break  # Stop after finding the first containing polygon
             if not found_area:
+                # This point was not in any of the candidate polygons
                 results.append((None, None))
     except ImportError:
+        # Fallback to non-indexed method (slower, but its logic was correct)
         print("Warning: shapely.strtree not found. Using slower point-in-polygon check.")
         for point in points:
             point_geom = Point(point['lng'], point['lat'])
@@ -568,7 +676,11 @@ def find_marketing_area_for_points(points, city_name):
                 results.append((None, None))
     return results
 
+# NEW: Improved heatmap functions
 def remove_outliers_and_normalize_improved(df, value_column, method='robust'):
+    """
+    Improved outlier removal and normalization using robust statistical methods.
+    """
     if df.empty or value_column not in df.columns:
         return df
     
@@ -582,16 +694,19 @@ def remove_outliers_and_normalize_improved(df, value_column, method='robust'):
     values = df_copy[value_column].values
     
     if method == 'robust':
+        # Use IQR method for outlier removal (more stable than percentiles)
         Q1 = np.percentile(values, 25)
         Q3 = np.percentile(values, 75)
         IQR = Q3 - Q1
         lower_bound = Q1 - 1.5 * IQR
         upper_bound = Q3 + 1.5 * IQR
         
+        # Keep some outliers to maintain data integrity
         lower_bound = max(lower_bound, np.percentile(values, 1))
         upper_bound = min(upper_bound, np.percentile(values, 99))
         
     elif method == 'zscore':
+        # Z-score method
         z_scores = np.abs(stats.zscore(values))
         threshold = 3
         mask = z_scores < threshold
@@ -600,25 +715,30 @@ def remove_outliers_and_normalize_improved(df, value_column, method='robust'):
         lower_bound = values.min()
         upper_bound = values.max()
     
+    # Apply bounds
     df_copy = df_copy[(df_copy[value_column] >= lower_bound) & (df_copy[value_column] <= upper_bound)]
     
     if df_copy.empty:
         print(f"No data left after outlier removal for {value_column}")
         return df_copy
     
+    # Use log transformation for better distribution
     log_values = np.log1p(df_copy[value_column])
     
+    # Robust normalization using percentiles instead of min-max
     p5 = np.percentile(log_values, 5)
     p95 = np.percentile(log_values, 95)
     
     if p95 > p5:
+        # Scale to 0-100 range, but cap extreme values
         normalized = ((log_values - p5) / (p95 - p5)) * 100
-        normalized = np.clip(normalized, 0, 100)
+        normalized = np.clip(normalized, 0, 100)  # Ensure values stay in bounds
     else:
         normalized = np.full(len(df_copy), 50)
     
     df_copy[f'{value_column}_normalized'] = normalized
     
+    # Also create a raw normalized version for comparison
     raw_values = df_copy[value_column].values
     raw_p5 = np.percentile(raw_values, 5)
     raw_p95 = np.percentile(raw_values, 95)
@@ -638,44 +758,58 @@ def remove_outliers_and_normalize_improved(df, value_column, method='robust'):
     return df_copy
 
 def aggregate_heatmap_points_adaptive(df, lat_col, lng_col, value_col, zoom_level=11):
+    """
+    Adaptive aggregation that adjusts precision based on zoom level and data density.
+    """
     if df.empty:
         return df
     
     df_copy = df.copy()
     
+    # Adaptive precision based on zoom level
+    # Higher zoom = more precision, lower zoom = less precision
     if zoom_level >= 16:
-        precision = 5
+        precision = 5  # Very fine
     elif zoom_level >= 14:
-        precision = 4
+        precision = 4  # Fine
     elif zoom_level >= 12:
-        precision = 3
+        precision = 3  # Medium
     elif zoom_level >= 10:
-        precision = 2
+        precision = 2  # Coarse
     else:
-        precision = 1
+        precision = 1  # Very coarse
     
+    # Round coordinates
     df_copy['lat_rounded'] = df_copy[lat_col].round(precision)
     df_copy['lng_rounded'] = df_copy[lng_col].round(precision)
     
+    # Aggregate with multiple statistics
     aggregated = df_copy.groupby(['lat_rounded', 'lng_rounded']).agg({
         value_col: ['sum', 'count', 'mean']
     }).reset_index()
     
+    # Flatten column names
     aggregated.columns = ['lat', 'lng', 'value_sum', 'value_count', 'value_mean']
     
+    # Use sum as primary value, but keep count for density weighting
     aggregated['value'] = aggregated['value_sum']
-    aggregated['density_weight'] = np.log1p(aggregated['value_count'])
+    aggregated['density_weight'] = np.log1p(aggregated['value_count'])  # Log scale for better distribution
     
+    # Apply density weighting to reduce noise in sparse areas
     aggregated['weighted_value'] = aggregated['value'] * (1 + aggregated['density_weight'] * 0.1)
     
     return aggregated[['lat', 'lng', 'weighted_value']].rename(columns={'weighted_value': 'value'})
 
 def aggregate_user_heatmap_points_improved(df, lat_col, lng_col, user_col, zoom_level=11):
+    """
+    Improved user aggregation with better handling of unique users.
+    """
     if df.empty:
         return df
     
     df_copy = df.copy()
     
+    # Adaptive precision
     if zoom_level >= 16:
         precision = 5
     elif zoom_level >= 14:
@@ -688,14 +822,19 @@ def aggregate_user_heatmap_points_improved(df, lat_col, lng_col, user_col, zoom_
     df_copy['lat_rounded'] = df_copy[lat_col].round(precision)
     df_copy['lng_rounded'] = df_copy[lng_col].round(precision)
     
+    # Count unique users per location
     aggregated = df_copy.groupby(['lat_rounded', 'lng_rounded'])[user_col].nunique().reset_index()
     aggregated.columns = ['lat', 'lng', 'unique_users']
     
-    aggregated['value'] = np.log1p(aggregated['unique_users']) * 10
+    # Apply log transformation for better distribution
+    aggregated['value'] = np.log1p(aggregated['unique_users']) * 10  # Scale up for visibility
     
     return aggregated[['lat', 'lng', 'value']]
 
 def generate_improved_heatmap_data(heatmap_type_req, df_orders_filtered, zoom_level=11):
+    """
+    Generate heatmap data using improved aggregation and normalization.
+    """
     heatmap_data = []
     
     if heatmap_type_req not in ["order_density", "order_density_organic", "order_density_non_organic", "user_density"]:
@@ -740,15 +879,20 @@ def generate_improved_heatmap_data(heatmap_type_req, df_orders_filtered, zoom_le
         else:
             df_aggregated = pd.DataFrame(columns=['lat', 'lng', 'value'])
     
+    # Apply improved normalization
     if not df_aggregated.empty:
         df_normalized = remove_outliers_and_normalize_improved(df_aggregated, 'value', method='robust')
         if not df_normalized.empty:
+            # Use the normalized values
             df_normalized['value'] = df_normalized['value_normalized']
             heatmap_data = df_normalized[['lat', 'lng', 'value']].to_dict(orient='records')
     
     return heatmap_data
 
 def generate_basic_heatmap_fallback(heatmap_type_req, df_orders_filtered):
+    """
+    Fallback method using the original heatmap generation logic.
+    """
     try:
         df_hm_source = df_orders_filtered.dropna(subset=['customer_latitude', 'customer_longitude'])
         if df_hm_source.empty:
@@ -783,37 +927,49 @@ def generate_basic_heatmap_fallback(heatmap_type_req, df_orders_filtered):
         print(f"Error in fallback heatmap generation: {e}")
         return []
 
+# LEGACY: Keep original functions for backward compatibility
 def remove_outliers_and_normalize(df, value_column, lower_percentile=5, upper_percentile=95):
+    """
+    Remove outliers using percentile method and normalize values to 0-100 range.
+    Returns a copy of the dataframe with normalized values.
+    """
     if df.empty or value_column not in df.columns:
         return df
     
+    # Create a copy to avoid modifying the original
     df_copy = df.copy()
     
+    # Remove rows where the value is null or zero
     df_copy = df_copy[df_copy[value_column].notna() & (df_copy[value_column] > 0)]
     
     if df_copy.empty:
         print(f"No valid {value_column} data after removing nulls/zeros")
         return df_copy
     
+    # Calculate percentiles for outlier removal
     lower_bound = df_copy[value_column].quantile(lower_percentile / 100)
     upper_bound = df_copy[value_column].quantile(upper_percentile / 100)
     
     print(f"{value_column} bounds: {lower_bound:,.0f} to {upper_bound:,.0f}")
     
+    # Remove outliers
     df_copy = df_copy[(df_copy[value_column] >= lower_bound) & (df_copy[value_column] <= upper_bound)]
     
     if df_copy.empty:
         print(f"No data left after outlier removal for {value_column}")
         return df_copy
     
+    # Normalize to 0-100 range
     min_val = df_copy[value_column].min()
     max_val = df_copy[value_column].max()
     
     if max_val > min_val:
         df_copy[f'{value_column}_normalized'] = ((df_copy[value_column] - min_val) / (max_val - min_val)) * 100
     else:
-        df_copy[f'{value_column}_normalized'] = 50
+        df_copy[f'{value_column}_normalized'] = 50  # If all values are the same, set to middle value
     
+    # Log transformation for better distribution (optional, helps with skewed data)
+    # This helps when you have many small values and few large values
     df_copy[f'{value_column}_log_normalized'] = np.log1p(df_copy[value_column])
     log_min = df_copy[f'{value_column}_log_normalized'].min()
     log_max = df_copy[f'{value_column}_log_normalized'].max()
@@ -827,18 +983,26 @@ def remove_outliers_and_normalize(df, value_column, lower_percentile=5, upper_pe
     return df_copy
 
 def aggregate_heatmap_points(df, lat_col, lng_col, value_col, precision=None):
+    """
+    Aggregate heatmap points by rounding coordinates to create heat accumulation.
+    This ensures areas with multiple orders show more heat.
+    """
     if df.empty:
         return df
     
+    # Create a copy to avoid modifying the original
     df_copy = df.copy()
     
+    # Round coordinates to aggregate nearby points
     df_copy['lat_rounded'] = df_copy[lat_col].round(precision)
     df_copy['lng_rounded'] = df_copy[lng_col].round(precision)
     
+    # Aggregate values for the same rounded location
     aggregated = df_copy.groupby(['lat_rounded', 'lng_rounded']).agg({
         value_col: 'sum'
     }).reset_index()
     
+    # Rename columns to standard names for output
     aggregated['lat'] = aggregated['lat_rounded']
     aggregated['lng'] = aggregated['lng_rounded']
     aggregated['value'] = aggregated[value_col]
@@ -846,20 +1010,28 @@ def aggregate_heatmap_points(df, lat_col, lng_col, value_col, precision=None):
     return aggregated[['lat', 'lng', 'value']]
 
 def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
+    """
+    Aggregate unique users by location for user heatmap.
+    """
     if df.empty:
         return df
     
+    # Create a copy
     df_copy = df.copy()
     
+    # Round coordinates
     df_copy['lat_rounded'] = df_copy[lat_col].round(precision)
     df_copy['lng_rounded'] = df_copy[lng_col].round(precision)
     
+    # Count unique users per location
     aggregated = df_copy.groupby(['lat_rounded', 'lng_rounded'])[user_col].nunique().reset_index()
     
+    # Rename columns
     aggregated['lat'] = aggregated['lat_rounded']
     aggregated['lng'] = aggregated['lng_rounded']
     aggregated['value'] = aggregated[user_col]
     
+    # Normalize values
     if len(aggregated) > 0:
         max_val = aggregated['value'].max()
         min_val = aggregated['value'].min()
@@ -870,7 +1042,9 @@ def aggregate_user_heatmap_points(df, lat_col, lng_col, user_col, precision=4):
     
     return aggregated[['lat', 'lng', 'value']]
 
+# Enhanced refresh functions with better timing tracking
 def refresh_vendor_data():
+    """Enhanced vendor data refresh with precise timing tracking"""
     global df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced, df_vendors_unified, current_vendor_map_type, refresh_stats
     
     logger.info("🔄 Starting multi-platform vendor data refresh...")
@@ -880,6 +1054,7 @@ def refresh_vendor_data():
     
     while retry_count < AUTO_REFRESH_MAX_RETRIES:
         try:
+            # Fetch fresh Tapsifood vendor data
             logger.info(f"🚀 Fetching LIVE Tapsifood vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
             df_vendors_raw = fetch_question_data(
                 question_id=VENDOR_DATA_QUESTION_ID,
@@ -891,6 +1066,7 @@ def refresh_vendor_data():
             if df_vendors_raw is None or df_vendors_raw.empty:
                 raise Exception("No Tapsifood vendor data received from Metabase")
             
+            # Process the Tapsifood data (same logic as in load_data)
             vendor_dtype = {
                 'city_id': 'Int64',
                 'vendor_code': 'str',
@@ -899,11 +1075,8 @@ def refresh_vendor_data():
                 'open': 'float32',
                 'radius': 'float32',
                 'business_line': 'category',
-                'ofood_delivery': 'int8',
-                'own_delivery': 'int8',
-                'availability_H': 'float32',
-                'shift_H': 'float32',
-                'availability': 'float32'
+                'ofood_delivery': 'int8',     # NEW: oFood delivery type
+                'own_delivery': 'int8'        # NEW: Own delivery type
             }
             
             existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
@@ -912,10 +1085,12 @@ def refresh_vendor_data():
             df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
             df_vendors_new_tapsifood = df_vendors_raw.copy()
             
-            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery', 'availability_H', 'shift_H', 'availability']:
+            # Handle missing columns and data types (same as in load_data)
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
                 if col not in df_vendors_new_tapsifood.columns: 
                     df_vendors_new_tapsifood[col] = np.nan
                     
+            # Fix NaN handling for numeric columns
             if 'visible' in df_vendors_new_tapsifood.columns: 
                 df_vendors_new_tapsifood['visible'] = safe_numeric_conversion(df_vendors_new_tapsifood['visible'])
             if 'open' in df_vendors_new_tapsifood.columns: 
@@ -931,34 +1106,33 @@ def refresh_vendor_data():
             if 'vendor_code' in df_vendors_new_tapsifood.columns: 
                 df_vendors_new_tapsifood['vendor_code'] = df_vendors_new_tapsifood['vendor_code'].astype(str)
             
+            # NEW: Handle delivery type columns
             if 'ofood_delivery' in df_vendors_new_tapsifood.columns:
                 df_vendors_new_tapsifood['ofood_delivery'] = safe_numeric_conversion(df_vendors_new_tapsifood['ofood_delivery'], 0).astype('int8')
             if 'own_delivery' in df_vendors_new_tapsifood.columns:
                 df_vendors_new_tapsifood['own_delivery'] = safe_numeric_conversion(df_vendors_new_tapsifood['own_delivery'], 0).astype('int8')
             
-            if 'availability_H' in df_vendors_new_tapsifood.columns:
-                df_vendors_new_tapsifood['availability_H'] = safe_numeric_conversion(df_vendors_new_tapsifood['availability_H'])
-            if 'shift_H' in df_vendors_new_tapsifood.columns:
-                df_vendors_new_tapsifood['shift_H'] = safe_numeric_conversion(df_vendors_new_tapsifood['shift_H'])
-            if 'availability' in df_vendors_new_tapsifood.columns:
-                df_vendors_new_tapsifood['availability'] = safe_numeric_conversion(df_vendors_new_tapsifood['availability'])
-            
+            # Store original radius for reset functionality
             if 'radius' in df_vendors_new_tapsifood.columns:
                 df_vendors_new_tapsifood['original_radius'] = df_vendors_new_tapsifood['radius'].copy()
                 
+            # Final memory optimization
             df_vendors_new_tapsifood = optimize_dataframe_memory(df_vendors_new_tapsifood)
             
+            # Thread-safe update of global variables
             with data_lock:
                 old_tapsifood_count = len(df_vendors_tapsifood) if df_vendors_tapsifood is not None else 0
                 df_vendors_tapsifood = df_vendors_new_tapsifood
                 
+                # Recreate unified dataset with current vendor map type
                 df_vendors_unified = create_unified_vendor_dataset(current_vendor_map_type)
                 new_unified_count = len(df_vendors_unified) if df_vendors_unified is not None else 0
                 
+                # Update refresh stats with precise timing
                 refresh_end_time = datetime.now()
                 refresh_stats['vendor_last_refresh'] = refresh_end_time
                 refresh_stats['vendor_refresh_count'] += 1
-                refresh_stats['vendor_refresh_errors'] = 0
+                refresh_stats['vendor_refresh_errors'] = 0  # Reset error count on success
             
             refresh_duration = (refresh_end_time - refresh_start_time).total_seconds()
             tapsifood_change = len(df_vendors_new_tapsifood) - old_tapsifood_count
@@ -969,6 +1143,7 @@ def refresh_vendor_data():
             logger.info(f"   Unified dataset ({current_vendor_map_type}): {new_unified_count:,} vendors")
             logger.info(f"   Next vendor refresh scheduled for: {refresh_end_time + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)}")
             
+            # Clear coverage cache since vendor data changed
             coverage_cache.clear()
             logger.info("   Coverage cache cleared due to vendor data update")
             
@@ -990,6 +1165,7 @@ def refresh_vendor_data():
     return False
 
 def refresh_order_data():
+    """Enhanced order data refresh with precise timing tracking"""
     global df_orders, refresh_stats
     
     logger.info("🔄 Starting order data refresh...")
@@ -999,6 +1175,7 @@ def refresh_order_data():
     
     while retry_count < AUTO_REFRESH_MAX_RETRIES:
         try:
+            # Fetch fresh order data
             logger.info(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
             df_orders_new = fetch_question_data(
                 question_id=ORDER_DATA_QUESTION_ID,
@@ -1010,6 +1187,7 @@ def refresh_order_data():
             if df_orders_new is None or df_orders_new.empty:
                 raise Exception("No order data received from Metabase")
             
+            # Process the data (same logic as in load_data)
             dtype_dict = {
                 'city_id': 'Int64',
                 'business_line': 'category',
@@ -1026,17 +1204,20 @@ def refresh_order_data():
             df_orders_new['city_name'] = df_orders_new['city_id'].map(city_id_map).astype('category')
             
             if 'organic' not in df_orders_new.columns:
+                # If organic column doesn't exist, create a random one for demo
                 df_orders_new['organic'] = np.random.choice([0, 1], size=len(df_orders_new), p=[0.7, 0.3]).astype('int8')
             
+            # Thread-safe update of global variable
             with data_lock:
                 old_order_count = len(df_orders) if df_orders is not None else 0
                 df_orders = df_orders_new
                 new_order_count = len(df_orders)
                 
+                # Update refresh stats with precise timing
                 refresh_end_time = datetime.now()
                 refresh_stats['order_last_refresh'] = refresh_end_time
                 refresh_stats['order_refresh_count'] += 1
-                refresh_stats['order_refresh_errors'] = 0
+                refresh_stats['order_refresh_errors'] = 0  # Reset error count on success
             
             refresh_duration = (refresh_end_time - refresh_start_time).total_seconds()
             order_change = new_order_count - old_order_count
@@ -1064,10 +1245,11 @@ def refresh_order_data():
     return False
 
 def schedule_refresh(refresh_func, interval_minutes, name):
+    """Schedule a refresh function to run at regular intervals"""
     def run_refresh():
         while True:
             try:
-                time.sleep(interval_minutes * 60)
+                time.sleep(interval_minutes * 60)  # Convert minutes to seconds
                 if refresh_stats['refresh_active']:
                     logger.info(f"🕐 Scheduled {name} refresh starting...")
                     refresh_func()
@@ -1076,13 +1258,14 @@ def schedule_refresh(refresh_func, interval_minutes, name):
                     logger.info(f"⏸️  Scheduled {name} refresh skipped (refresh disabled)")
             except Exception as e:
                 logger.error(f"❌ Error in scheduled {name} refresh: {e}")
-                time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)
+                time.sleep(AUTO_REFRESH_RETRY_DELAY_SECONDS)  # Wait before trying again
     
     thread = threading.Thread(target=run_refresh, name=f"{name}_refresh_thread", daemon=True)
     thread.start()
     return thread
 
 def start_auto_refresh():
+    """Start the auto-refresh threads"""
     global refresh_threads
     
     if not ENABLE_AUTO_REFRESH:
@@ -1094,8 +1277,10 @@ def start_auto_refresh():
     logger.info(f"   Order refresh interval: {ORDER_REFRESH_INTERVAL_MINUTES} minutes")
     logger.info(f"   Initial refresh delay: {REFRESH_ON_STARTUP_DELAY_SECONDS} seconds")
     
+    # Mark refresh as active
     refresh_stats['refresh_active'] = True
     
+    # Start vendor refresh thread
     def delayed_vendor_refresh():
         time.sleep(REFRESH_ON_STARTUP_DELAY_SECONDS)
         refresh_threads['vendor'] = schedule_refresh(
@@ -1104,6 +1289,7 @@ def start_auto_refresh():
             "vendor"
         )
     
+    # Start order refresh thread
     def delayed_order_refresh():
         time.sleep(REFRESH_ON_STARTUP_DELAY_SECONDS)
         refresh_threads['order'] = schedule_refresh(
@@ -1112,20 +1298,24 @@ def start_auto_refresh():
             "order"
         )
     
+    # Start both with initial delay
     threading.Thread(target=delayed_vendor_refresh, daemon=True).start()
     threading.Thread(target=delayed_order_refresh, daemon=True).start()
     
     logger.info("✅ Multi-platform auto-refresh threads started")
 
 def stop_auto_refresh():
+    """Stop the auto-refresh system"""
     global refresh_stats
     
     logger.info("🛑 Stopping multi-platform auto-refresh system...")
     refresh_stats['refresh_active'] = False
     
+    # Note: Daemon threads will stop automatically when the main process exits
     logger.info("✅ Multi-platform auto-refresh system stopped")
 
 def load_data():
+    """Load all required datasets from Metabase and local sources with multi-platform support."""
     global df_orders, df_vendors_tapsifood, df_vendors_snappfood, df_graded_enhanced, df_vendors_unified, current_vendor_map_type
     global gdf_marketing_areas, gdf_tehran_region, gdf_tehran_main_districts, df_coverage_targets, target_lookup_dict
     
@@ -1133,6 +1323,7 @@ def load_data():
     start_time = time.time()
     
     try:
+        # 1. ORDER DATA - Load and optimize (unchanged)
         print(f"🚀 Fetching LIVE order data from Metabase Question ID: {ORDER_DATA_QUESTION_ID}...")
         df_orders = fetch_question_data(
             question_id=ORDER_DATA_QUESTION_ID,
@@ -1142,6 +1333,7 @@ def load_data():
         )
         
         if df_orders is not None and not df_orders.empty:
+            # Specify dtypes to reduce memory usage and speed up loading
             dtype_dict = {
                 'city_id': 'Int64',
                 'business_line': 'category',
@@ -1150,9 +1342,11 @@ def load_data():
                 'organic': 'int8'
             }
             
+            # Apply only dtypes that exist in the dataframe
             existing_dtypes = {k: v for k, v in dtype_dict.items() if k in df_orders.columns}
             df_orders = df_orders.astype(existing_dtypes)
             
+            # APPLY MEMORY OPTIMIZATION IMMEDIATELY
             df_orders = optimize_dataframe_memory(df_orders)
             
             df_orders['created_at'] = pd.to_datetime(df_orders['created_at'], errors='coerce')
@@ -1160,6 +1354,7 @@ def load_data():
             df_orders['city_name'] = df_orders['city_id'].map(city_id_map).astype('category')
             
             if 'organic' not in df_orders.columns:
+                # If organic column doesn't exist, create a random one for demo
                 df_orders['organic'] = np.random.choice([0, 1], size=len(df_orders), p=[0.7, 0.3]).astype('int8')
             
             print(f"Orders loaded: {len(df_orders)} rows in {time.time() - start_time:.2f}s")
@@ -1171,6 +1366,7 @@ def load_data():
         print(f"Error loading order data: {e}")
         df_orders = pd.DataFrame()
     
+    # 2. TAPSIFOOD VENDOR DATA - Load and optimize  
     try:
         vendor_start = time.time()
         vendor_dtype = {
@@ -1180,12 +1376,9 @@ def load_data():
             'visible': 'float32',
             'open': 'float32',
             'radius': 'float32',
-            'business_line': 'category',
-            'ofood_delivery': 'int8',
-            'own_delivery': 'int8',
-            'availability_H': 'float32',
-            'shift_H': 'float32',
-            'availability': 'float32'
+            'business_line': 'category',  # ADDED: Ensure business_line is treated as category
+            'ofood_delivery': 'int8',     # NEW: oFood delivery type
+            'own_delivery': 'int8'        # NEW: Own delivery type
         }
         
         print(f"🚀 Fetching LIVE Tapsifood vendor data from Metabase Question ID: {VENDOR_DATA_QUESTION_ID}...")
@@ -1197,24 +1390,29 @@ def load_data():
         )
         
         if df_vendors_raw is not None and not df_vendors_raw.empty:
+            # Apply only dtypes that exist in the dataframe
             existing_vendor_dtypes = {k: v for k, v in vendor_dtype.items() if k in df_vendors_raw.columns}
             df_vendors_raw = df_vendors_raw.astype(existing_vendor_dtypes)
             
+            # APPLY MEMORY OPTIMIZATION IMMEDIATELY
             df_vendors_raw = optimize_dataframe_memory(df_vendors_raw)
             
             df_vendors_raw['city_name'] = df_vendors_raw['city_id'].map(city_id_map).astype('category')
             
+            # Store as Tapsifood vendor data
             df_vendors_tapsifood = df_vendors_raw.copy()
             
+            # Debug: Print business line info
             if 'business_line' in df_vendors_tapsifood.columns:
                 print(f"Business lines in Tapsifood vendors: {sorted(df_vendors_tapsifood['business_line'].unique())}")
                 print(f"Business line counts: {df_vendors_tapsifood['business_line'].value_counts()}")
             else:
                 print("WARNING: business_line column not found in Tapsifood vendor data!")
             
-            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery', 'availability_H', 'shift_H', 'availability']:
+            for col in ['latitude', 'longitude', 'vendor_name', 'radius', 'status_id', 'visible', 'open', 'vendor_code', 'ofood_delivery', 'own_delivery']:
                 if col not in df_vendors_tapsifood.columns: df_vendors_tapsifood[col] = np.nan
                 
+            # FIX: Proper NaN handling for numeric columns
             if 'visible' in df_vendors_tapsifood.columns: 
                 df_vendors_tapsifood['visible'] = safe_numeric_conversion(df_vendors_tapsifood['visible'])
             if 'open' in df_vendors_tapsifood.columns: 
@@ -1230,21 +1428,17 @@ def load_data():
             if 'vendor_code' in df_vendors_tapsifood.columns: 
                 df_vendors_tapsifood['vendor_code'] = df_vendors_tapsifood['vendor_code'].astype(str)
             
+            # NEW: Handle delivery type columns
             if 'ofood_delivery' in df_vendors_tapsifood.columns:
                 df_vendors_tapsifood['ofood_delivery'] = safe_numeric_conversion(df_vendors_tapsifood['ofood_delivery'], 0).astype('int8')
             if 'own_delivery' in df_vendors_tapsifood.columns:
                 df_vendors_tapsifood['own_delivery'] = safe_numeric_conversion(df_vendors_tapsifood['own_delivery'], 0).astype('int8')
             
-            if 'availability_H' in df_vendors_tapsifood.columns:
-                df_vendors_tapsifood['availability_H'] = safe_numeric_conversion(df_vendors_tapsifood['availability_H'])
-            if 'shift_H' in df_vendors_tapsifood.columns:
-                df_vendors_tapsifood['shift_H'] = safe_numeric_conversion(df_vendors_tapsifood['shift_H'])
-            if 'availability' in df_vendors_tapsifood.columns:
-                df_vendors_tapsifood['availability'] = safe_numeric_conversion(df_vendors_tapsifood['availability'])
-            
+            # Store original radius for reset functionality
             if 'radius' in df_vendors_tapsifood.columns:
                 df_vendors_tapsifood['original_radius'] = df_vendors_tapsifood['radius'].copy()
                 
+            # FINAL MEMORY OPTIMIZATION after all processing
             df_vendors_tapsifood = optimize_dataframe_memory(df_vendors_tapsifood)
                 
             print(f"Tapsifood vendors loaded: {len(df_vendors_tapsifood)} rows in {time.time() - vendor_start:.2f}s")
@@ -1256,6 +1450,7 @@ def load_data():
         print(f"Error loading Tapsifood vendor data: {e}")
         df_vendors_tapsifood = pd.DataFrame()
     
+    # 3. NEW: Load Snappfood vendor data
     try:
         snappfood_start = time.time()
         df_vendors_snappfood = load_snappfood_vendors()
@@ -1265,6 +1460,7 @@ def load_data():
         print(f"Error loading Snappfood vendor data: {e}")
         df_vendors_snappfood = pd.DataFrame()
     
+    # 4. NEW: Load enhanced graded data with dual mapping
     try:
         graded_start = time.time()
         df_graded_enhanced = load_enhanced_graded_data()
@@ -1274,12 +1470,14 @@ def load_data():
         print(f"Error loading enhanced graded data: {e}")
         df_graded_enhanced = pd.DataFrame()
     
+    # 5. NEW: Create unified vendor dataset based on default vendor map type
     try:
         unified_start = time.time()
         df_vendors_unified = create_unified_vendor_dataset(current_vendor_map_type)
         if not df_vendors_unified.empty:
             print(f"Unified vendor dataset ({current_vendor_map_type}) created: {len(df_vendors_unified)} vendors in {time.time() - unified_start:.2f}s")
             
+            # Show vendor source distribution
             if 'vendor_source' in df_vendors_unified.columns:
                 source_dist = df_vendors_unified['vendor_source'].value_counts()
                 print(f"   Vendor sources: {source_dist.to_dict()}")
@@ -1289,9 +1487,11 @@ def load_data():
         print(f"Error creating unified vendor dataset: {e}")
         df_vendors_unified = pd.DataFrame()
     
+    # 6. Polygon Data - Load in parallel if possible (unchanged)
     poly_start = time.time()
     marketing_areas_base = os.path.join(SRC_DIR, 'polygons', 'tapsifood_marketing_areas')
     
+    # NEW: Store area name-to-id mappings for both Tehran and Mashhad
     city_area_name_to_id_maps = {}
     
     for city_file_name in ['mashhad_polygons.csv', 'tehran_polygons.csv', 'shiraz_polygons.csv']:
@@ -1302,6 +1502,7 @@ def load_data():
             if 'WKT' not in df_poly.columns: df_poly['WKT'] = None
             df_poly['geometry'] = df_poly['WKT'].apply(lambda x: wkt.loads(x) if pd.notna(x) else None)
             
+            # --- NEW: Add a unique, stable ID for robust matching ---
             df_poly['area_id'] = f"{city_name_key}_" + df_poly.index.astype(str)
             
             if 'name' not in df_poly.columns: 
@@ -1312,6 +1513,7 @@ def load_data():
             gdf = gpd.GeoDataFrame(df_poly, geometry='geometry', crs="EPSG:4326").dropna(subset=['geometry'])
             gdf_marketing_areas[city_name_key] = gdf
             
+            # Store the name -> id map for this city (for both Tehran and Mashhad)
             city_area_name_to_id_maps[city_name_key] = gdf.set_index('name')['area_id'].to_dict()
             print(f"DEBUG: Created {city_name_key} area name-to-id map with {len(city_area_name_to_id_maps[city_name_key])} entries.")
             
@@ -1320,19 +1522,25 @@ def load_data():
             print(f"Error loading marketing areas for {city_name_key} from {file_path}: {e}")
             gdf_marketing_areas[city_name_key] = gpd.GeoDataFrame()
     
-    target_lookup_dict = {}
-    
+    # --- NEW: Load coverage targets for both Tehran and Mashhad ---
+    # Load Tehran coverage targets
     tehran_coverage_target_file = os.path.join(SRC_DIR, 'targets', 'tehran_coverage.csv')
     mashhad_coverage_target_file = os.path.join(SRC_DIR, 'targets', 'mashhad_coverage.csv')
     
+    # Combined target lookup dictionary
+    target_lookup_dict = {}
+    
+    # Load Tehran targets
     try:
         df_temp_targets_tehran = pd.read_csv(tehran_coverage_target_file, encoding='utf-8')
         if 'marketing_area' in df_temp_targets_tehran.columns:
             df_temp_targets_tehran['marketing_area'] = df_temp_targets_tehran['marketing_area'].str.strip()
             
+            # Map Tehran area names to area_ids
             if 'tehran' in city_area_name_to_id_maps:
                 df_temp_targets_tehran['area_id'] = df_temp_targets_tehran['marketing_area'].map(city_area_name_to_id_maps['tehran'])
                 
+                # Check for mismatches
                 unmapped_areas = df_temp_targets_tehran[df_temp_targets_tehran['area_id'].isna()]
                 if not unmapped_areas.empty:
                     print(f"!!! WARNING: Could not map {len(unmapped_areas['marketing_area'].unique())} Tehran areas from tehran_coverage.csv to polygon IDs.")
@@ -1340,12 +1548,14 @@ def load_data():
                 
                 df_temp_targets_tehran.dropna(subset=['area_id'], inplace=True)
                 
+                # Melt to long format and add to lookup dict
                 df_coverage_targets_tehran = df_temp_targets_tehran.melt(
                     id_vars=['area_id', 'marketing_area'],
                     var_name='business_line',
                     value_name='target'
                 )
                 
+                # Add Tehran targets to lookup dict
                 tehran_lookup = df_coverage_targets_tehran.set_index(['area_id', 'business_line'])['target'].to_dict()
                 target_lookup_dict.update(tehran_lookup)
                 
@@ -1355,14 +1565,17 @@ def load_data():
     except Exception as e:
         print(f"Error loading tehran_coverage.csv: {e}")
     
+    # NEW: Load Mashhad targets
     try:
         df_temp_targets_mashhad = pd.read_csv(mashhad_coverage_target_file, encoding='utf-8')
         if 'marketing_area' in df_temp_targets_mashhad.columns:
             df_temp_targets_mashhad['marketing_area'] = df_temp_targets_mashhad['marketing_area'].str.strip()
             
+            # Map Mashhad area names to area_ids
             if 'mashhad' in city_area_name_to_id_maps:
                 df_temp_targets_mashhad['area_id'] = df_temp_targets_mashhad['marketing_area'].map(city_area_name_to_id_maps['mashhad'])
                 
+                # Check for mismatches
                 unmapped_areas = df_temp_targets_mashhad[df_temp_targets_mashhad['area_id'].isna()]
                 if not unmapped_areas.empty:
                     print(f"!!! WARNING: Could not map {len(unmapped_areas['marketing_area'].unique())} Mashhad areas from mashhad_coverage.csv to polygon IDs.")
@@ -1370,12 +1583,14 @@ def load_data():
                 
                 df_temp_targets_mashhad.dropna(subset=['area_id'], inplace=True)
                 
+                # Melt to long format and add to lookup dict
                 df_coverage_targets_mashhad = df_temp_targets_mashhad.melt(
                     id_vars=['area_id', 'marketing_area'],
                     var_name='business_line',
                     value_name='target'
                 )
                 
+                # Add Mashhad targets to lookup dict
                 mashhad_lookup = df_coverage_targets_mashhad.set_index(['area_id', 'business_line'])['target'].to_dict()
                 target_lookup_dict.update(mashhad_lookup)
                 
@@ -1388,6 +1603,7 @@ def load_data():
     
     print(f"DEBUG: Total coverage target lookup entries: {len(target_lookup_dict)}")
     if target_lookup_dict:
+        # Print sample entries for verification
         sample_keys = list(target_lookup_dict.keys())[:3]
         for key in sample_keys:
             print(f"--- Sample lookup entry: {key} -> {target_lookup_dict[key]}")
@@ -1395,6 +1611,7 @@ def load_data():
     gdf_tehran_region = load_tehran_shapefile('RegionTehran_WGS1984.shp')
     gdf_tehran_main_districts = load_tehran_shapefile('Tehran_WGS1984.shp')
     
+    # Memory usage summary
     total_memory_mb = 0
     if df_orders is not None and not df_orders.empty:
         orders_memory = df_orders.memory_usage(deep=True).sum() / 1024**2
@@ -1421,12 +1638,14 @@ def load_data():
     total_time = time.time() - start_time
     print(f"Multi-platform data loading complete in {total_time:.2f} seconds.")
     
+    # NEW: Start auto-refresh after initial data loading
     if ENABLE_AUTO_REFRESH:
         try:
             start_auto_refresh()
         except Exception as e:
             logger.error(f"Failed to start auto-refresh: {e}")
 
+# --- Serve Static Files (Frontend) ---
 @app.route('/')
 def serve_index():
     return send_from_directory(PUBLIC_DIR, 'index.html')
@@ -1453,6 +1672,7 @@ def get_initial_data():
     
     vendor_statuses = []
     if not df_vendors_unified.empty and 'status_id' in df_vendors_unified.columns:
+        # Filter out NaN values before converting to int
         status_series = df_vendors_unified['status_id'].dropna()
         if not status_series.empty:
             vendor_statuses = sorted([int(x) for x in status_series.unique()])
@@ -1461,6 +1681,7 @@ def get_initial_data():
     if not df_vendors_unified.empty and 'grade' in df_vendors_unified.columns:
         vendor_grades = sorted(safe_tolist(df_vendors_unified['grade'].astype(str)))
     
+    # NEW: Add vendor map type options
     vendor_map_type_options = [
         {
             "value": key,
@@ -1479,21 +1700,25 @@ def get_initial_data():
         "tehran_main_districts": tehran_main_districts,
         "vendor_statuses": vendor_statuses,
         "vendor_grades": vendor_grades,
+        # NEW: Multi-platform vendor options
         "vendor_map_type_options": vendor_map_type_options,
         "default_vendor_map_type": DEFAULT_VENDOR_MAP_TYPE
     })
 
 @app.route('/api/refresh-status', methods=['GET'])
 def get_refresh_status():
+    """Get the current status of auto-refresh system with enhanced timing info"""
     with data_lock:
         current_time = datetime.now()
         
+        # Calculate next refresh times
         vendor_next_refresh = None
         order_next_refresh = None
         
         if refresh_stats['vendor_last_refresh']:
             vendor_next_refresh = refresh_stats['vendor_last_refresh'] + timedelta(minutes=VENDOR_REFRESH_INTERVAL_MINUTES)
         else:
+            # If never refreshed, next refresh is the startup delay from now
             vendor_next_refresh = current_time + timedelta(seconds=REFRESH_ON_STARTUP_DELAY_SECONDS)
             
         if refresh_stats['order_last_refresh']:
@@ -1527,6 +1752,7 @@ def get_refresh_status():
                 "unified_vendors": len(df_vendors_unified) if df_vendors_unified is not None else 0,
                 "orders": len(df_orders) if df_orders is not None else 0
             },
+            # NEW: Multi-platform vendor info
             "multi_platform_info": {
                 "current_vendor_map_type": current_vendor_map_type,
                 "available_types": list(VENDOR_MAP_TYPES.keys())
@@ -1537,6 +1763,7 @@ def get_refresh_status():
 
 @app.route('/api/refresh-now', methods=['POST'])
 def trigger_manual_refresh():
+    """Enhanced manual refresh trigger with separate vendor/order control"""
     try:
         request_data = request.get_json() if request.is_json else {}
         data_type = request_data.get('type', 'both')
@@ -1564,6 +1791,7 @@ def trigger_manual_refresh():
             if not order_success:
                 overall_success = False
         
+        # Provide detailed response
         response_data = {
             "success": overall_success,
             "results": results,
@@ -1572,6 +1800,7 @@ def trigger_manual_refresh():
             "timestamp": datetime.now().isoformat()
         }
         
+        # Add next refresh times to response
         with data_lock:
             current_time = datetime.now()
             if 'vendor_success' in results and results['vendor_success']:
@@ -1593,9 +1822,21 @@ def trigger_manual_refresh():
         }), 500
 
 def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filtered, df_o_all_for_city):
+    """
+    Enriches a polygon GeoDataFrame with vendor and user statistics.
+    Args:
+        gdf_polygons (gpd.GeoDataFrame): The polygons to enrich.
+        name_col (str): The name of the unique identifier column in the polygon GDF.
+        df_v_filtered (pd.DataFrame): Pre-filtered vendor data.
+        df_o_filtered (pd.DataFrame): Pre-filtered order data (by date, bl, etc.).
+        df_o_all_for_city (pd.DataFrame): Order data filtered only by city (for total user count).
+    Returns:
+        gpd.GeoDataFrame: The enriched GeoDataFrame.
+    """
     if gdf_polygons is None or gdf_polygons.empty:
         return gpd.GeoDataFrame()
     enriched_gdf = gdf_polygons.copy()
+    # --- 1. Vendor Enrichment ---
     if not df_v_filtered.empty and not df_v_filtered.dropna(subset=['latitude', 'longitude']).empty:
         gdf_v_filtered_for_enrich = gpd.GeoDataFrame(
             df_v_filtered.dropna(subset=['latitude', 'longitude']),
@@ -1603,8 +1844,10 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
             crs="EPSG:4326"
         )
         joined_vendors = gpd.sjoin(gdf_v_filtered_for_enrich, enriched_gdf, how="inner", predicate="within")
+        # Total vendor count
         vendor_counts = joined_vendors.groupby(name_col).size().rename('vendor_count')
         enriched_gdf = enriched_gdf.merge(vendor_counts, how='left', left_on=name_col, right_index=True)
+        # Vendor count by grade
         if 'grade' in joined_vendors.columns:
             grade_counts_series = joined_vendors.groupby([name_col, 'grade'], observed=True).size().unstack(fill_value=0)
             grade_counts_dict = grade_counts_series.apply(lambda row: {k: v for k, v in row.items() if v > 0}, axis=1).to_dict()
@@ -1612,6 +1855,7 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
         else:
              enriched_gdf['grade_counts'] = None
         
+        # NEW: Vendor count by platform source
         if 'vendor_source' in joined_vendors.columns:
             source_counts_series = joined_vendors.groupby([name_col, 'vendor_source'], observed=True).size().unstack(fill_value=0)
             source_counts_dict = source_counts_series.apply(lambda row: {k: v for k, v in row.items() if v > 0}, axis=1).to_dict()
@@ -1624,8 +1868,10 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
         enriched_gdf['source_counts'] = None
     
     enriched_gdf['vendor_count'] = enriched_gdf['vendor_count'].fillna(0).astype(int)
+    # --- 2. Unique User Enrichment (Date-Ranged & Total) ---
     has_user_id = 'user_id' in df_o_all_for_city.columns
     if has_user_id:
+        # A) Date-Ranged Unique Users
         if not df_o_filtered.empty and not df_o_filtered.dropna(subset=['customer_latitude', 'customer_longitude']).empty:
             gdf_orders_filtered = gpd.GeoDataFrame(
                 df_o_filtered.dropna(subset=['customer_latitude', 'customer_longitude']),
@@ -1636,6 +1882,7 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
             user_counts_filtered = joined_orders_filtered.groupby(name_col, observed=True)['user_id'].nunique().rename('unique_user_count')
             enriched_gdf = enriched_gdf.merge(user_counts_filtered, how='left', left_on=name_col, right_index=True)
         
+        # B) Total (All-Time) Unique Users for the city
         if not df_o_all_for_city.empty and not df_o_all_for_city.dropna(subset=['customer_latitude', 'customer_longitude']).empty:
             gdf_orders_all = gpd.GeoDataFrame(
                 df_o_all_for_city.dropna(subset=['customer_latitude', 'customer_longitude']),
@@ -1648,6 +1895,7 @@ def enrich_polygons_with_stats(gdf_polygons, name_col, df_v_filtered, df_o_filte
     enriched_gdf['unique_user_count'] = enriched_gdf.get('unique_user_count', pd.Series(0, index=enriched_gdf.index)).fillna(0).astype(int)
     enriched_gdf['total_unique_user_count'] = enriched_gdf.get('total_unique_user_count', pd.Series(0, index=enriched_gdf.index)).fillna(0).astype(int)
     
+    # --- 3. Population-based Metrics (if Pop data exists) ---
     if 'Pop' in enriched_gdf.columns:
         enriched_gdf['Pop'] = safe_numeric_conversion(enriched_gdf['Pop'], 0)
         enriched_gdf['vendor_per_10k_pop'] = enriched_gdf.apply(
@@ -1665,12 +1913,15 @@ def get_map_data():
     if df_orders is None:
         return jsonify({"error": "Server order data not loaded"}), 500
     try:
+        # Start timing
         request_start = time.time()
         
+        # Use thread-safe access to global data
         with data_lock:
             df_orders_copy = df_orders.copy() if df_orders is not None else pd.DataFrame()
             df_vendors_copy = df_vendors_unified.copy() if df_vendors_unified is not None else pd.DataFrame()
         
+        # --- Parsing of filters ---
         city_name = request.args.get('city', default="tehran", type=str)
         start_date_str = request.args.get('start_date')
         end_date_str = request.args.get('end_date')
@@ -1689,19 +1940,23 @@ def get_map_data():
         area_type_display = request.args.get('area_type_display', default="tapsifood_marketing_areas", type=str)
         selected_polygon_sub_types = [s.strip() for s in request.args.getlist('area_sub_type_filter') if s.strip()]
         
+        # NEW: Multi-platform vendor filters
         vendor_map_type = request.args.get('vendor_map_type', default=current_vendor_map_type, type=str)
         is_express_filter = request.args.get('is_express', default="all", type=str)
         is_dual_filter = request.args.get('is_dual', default="all", type=str)
         is_own_delivery_filter = request.args.get('is_own_delivery', default="all", type=str)
         is_ofood_delivery_filter = request.args.get('is_ofood_delivery', default="all", type=str)
-        availability_min_filter = request.args.get('availability_min', default="", type=str)
+        availability_min_filter = request.args.get('availability_min', default=None, type=float)
         
+        # NEW: Get zoom level for adaptive heatmap processing
         zoom_level = request.args.get('zoom_level', default=11, type=float)
         
+        # Radius modifier parameters - NEW: Handle grade-based radius mode
         radius_modifier = request.args.get('radius_modifier', default=1.0, type=float)
         radius_mode = request.args.get('radius_mode', default='percentage', type=str)
         radius_fixed = request.args.get('radius_fixed', default=3.0, type=float)
         
+        # NEW: Check if vendor map type has changed and update unified dataset
         if vendor_map_type != current_vendor_map_type:
             print(f"DEBUG: Vendor map type changed from {current_vendor_map_type} to {vendor_map_type}")
             current_vendor_map_type = vendor_map_type
@@ -1710,36 +1965,42 @@ def get_map_data():
                 df_vendors_copy = df_vendors_unified.copy() if df_vendors_unified is not None else pd.DataFrame()
             print(f"DEBUG: Updated unified dataset: {len(df_vendors_copy)} vendors")
         
+        # DEBUG: Print filter info
         print(f"DEBUG: Vendor map type = {vendor_map_type}")
         print(f"DEBUG: Business line filter = {selected_business_lines}")
         print(f"DEBUG: Total vendors before filtering = {len(df_vendors_copy)}")
         print(f"DEBUG: Radius mode = {radius_mode}")
         print(f"DEBUG: is_express filter = {is_express_filter}")
         print(f"DEBUG: is_dual filter = {is_dual_filter}")
-        print(f"DEBUG: availability_min filter = {availability_min_filter}")
         
         heatmap_data = []
         vendor_markers = []
         polygons_geojson = {"type": "FeatureCollection", "features": []}
         coverage_grid_data = []
         
+        # --- IMPROVED Vendor filtering logic with multi-platform support ---
         df_v_filtered = df_vendors_copy.copy()
         
+        # Check if required columns exist
         required_vendor_columns = ['latitude', 'longitude', 'vendor_code']
         missing_columns = [col for col in required_vendor_columns if col not in df_v_filtered.columns]
         if missing_columns:
             print(f"Warning: Missing vendor columns: {missing_columns}")
             vendor_markers = []
         else:
+            # 1. Apply radius modifier based on mode - NEW: Handle grade-based radius
             if 'radius' in df_v_filtered.columns and 'original_radius' in df_v_filtered.columns:
                 if radius_mode == 'fixed':
                     df_v_filtered['radius'] = radius_fixed
                 elif radius_mode == 'grade':
+                    # NEW: Apply grade-based radius
                     print(f"DEBUG: Applying grade-based radius...")
                     df_v_filtered = apply_grade_based_radius(df_v_filtered)
                 else:
+                    # Handle NaN values in original_radius for percentage mode
                     df_v_filtered['radius'] = df_v_filtered['original_radius'].fillna(3.0) * radius_modifier
             elif 'radius' in df_v_filtered.columns:
+                # Handle case where original_radius doesn't exist (e.g., Snappfood vendors)
                 if radius_mode == 'fixed':
                     df_v_filtered['radius'] = radius_fixed
                 elif radius_mode == 'grade':
@@ -1747,13 +2008,16 @@ def get_map_data():
                 else:
                     df_v_filtered['radius'] = df_v_filtered['radius'].fillna(3.0) * radius_modifier
             
+            # 2. Remove vendors with invalid coordinates
             df_v_filtered = df_v_filtered.dropna(subset=['latitude', 'longitude', 'vendor_code'])
             print(f"DEBUG: Vendors after coordinate filtering = {len(df_v_filtered)}")
             
+            # 3. Filter by city
             if city_name != "all" and 'city_name' in df_v_filtered.columns: 
                 df_v_filtered = df_v_filtered[df_v_filtered['city_name'] == city_name]
                 print(f"DEBUG: Vendors after city filtering ({city_name}) = {len(df_v_filtered)}")
             
+            # 4. EARLY BUSINESS LINE FILTERING - Apply this before area filtering
             if selected_business_lines and 'business_line' in df_v_filtered.columns:
                 bl_series = df_v_filtered['business_line']
                 bl_display = sorted(map(str, bl_series.dropna().unique()))
@@ -1761,10 +2025,12 @@ def get_map_data():
                 df_v_filtered = df_v_filtered[bl_series.astype(str).isin(selected_business_lines)]
                 print(f"DEBUG: Vendors after business line filtering = {len(df_v_filtered)}")
             
+            # 5. Filter by specific vendor codes
             if selected_vendor_codes_for_vendors_only and 'vendor_code' in df_v_filtered.columns: 
                 df_v_filtered = df_v_filtered[df_v_filtered['vendor_code'].astype(str).isin(selected_vendor_codes_for_vendors_only)]
                 print(f"DEBUG: Vendors after vendor code filtering = {len(df_v_filtered)}")
             
+            # 6. Filter by vendor area (spatial filtering)
             if vendor_area_main_type != 'all' and selected_vendor_area_sub_types and not df_v_filtered.empty:
                 if vendor_area_main_type == 'tapsifood_marketing_areas' and not df_orders_copy.empty and 'marketing_area' in df_orders_copy.columns:
                     temp_orders_ma = df_orders_copy[df_orders_copy['marketing_area'].isin(selected_vendor_area_sub_types)]
@@ -1784,15 +2050,19 @@ def get_map_data():
                             df_v_filtered = df_v_filtered[df_v_filtered['vendor_code'].isin(codes_in_area)]
                 print(f"DEBUG: Vendors after area filtering = {len(df_v_filtered)}")
             
+            # 7. NEW: Apply multi-platform specific filters
             if not df_v_filtered.empty:
+                # is_express filter (applies to Snappfood vendors)
                 if is_express_filter != "all" and 'is_express' in df_v_filtered.columns:
                     df_v_filtered = df_v_filtered[df_v_filtered['is_express'] == int(is_express_filter)]
                     print(f"DEBUG: Vendors after is_express filtering = {len(df_v_filtered)}")
                 
+                # is_dual filter (applies to all vendors)
                 if is_dual_filter != "all" and 'is_dual' in df_v_filtered.columns:
                     df_v_filtered = df_v_filtered[df_v_filtered['is_dual'] == int(is_dual_filter)]
                     print(f"DEBUG: Vendors after is_dual filtering = {len(df_v_filtered)}")
                 
+                # Delivery type filters (apply to Tapsifood vendors)
                 if is_own_delivery_filter != "all" and 'own_delivery' in df_v_filtered.columns:
                     df_v_filtered = df_v_filtered[df_v_filtered['own_delivery'] == int(is_own_delivery_filter)]
                     print(f"DEBUG: Vendors after is_own_delivery filtering = {len(df_v_filtered)}")
@@ -1801,15 +2071,12 @@ def get_map_data():
                     df_v_filtered = df_v_filtered[df_v_filtered['ofood_delivery'] == int(is_ofood_delivery_filter)]
                     print(f"DEBUG: Vendors after is_ofood_delivery filtering = {len(df_v_filtered)}")
                 
-                if availability_min_filter and availability_min_filter.strip() and 'availability' in df_v_filtered.columns:
-                    try:
-                        availability_threshold = float(availability_min_filter.strip())
-                        initial_count = len(df_v_filtered)
-                        df_v_filtered = df_v_filtered[df_v_filtered['availability'] >= availability_threshold]
-                        print(f"DEBUG: Vendors after availability >= {availability_threshold} filtering: {initial_count} → {len(df_v_filtered)}")
-                    except ValueError:
-                        print(f"WARNING: Invalid availability filter value: {availability_min_filter}")
+                # NEW: Availability filter
+                if availability_min_filter is not None and 'availability' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['availability'] >= availability_min_filter]
+                    print(f"DEBUG: Vendors after availability filtering (>= {availability_min_filter}) = {len(df_v_filtered)}")
             
+            # 8. Apply other vendor filters
             if not df_v_filtered.empty:
                 if selected_vendor_status_ids and 'status_id' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['status_id'].isin(selected_vendor_status_ids)]
@@ -1825,12 +2092,14 @@ def get_map_data():
                     print(f"DEBUG: Vendors after open filtering = {len(df_v_filtered)}")
             
             if not df_v_filtered.empty:
+                # FIX: Clean data before converting to dict
                 vendor_markers = clean_data_for_json(df_v_filtered.to_dict(orient='records'))
                 print(f"DEBUG: Final vendor count for map = {len(vendor_markers)}")
             else:
                 vendor_markers = []
                 print("DEBUG: No vendors after filtering")
         
+        # --- Prepare filtered and total order dataframes for enrichment ---
         df_orders_filtered = df_orders_copy.copy()
         if city_name != "all": df_orders_filtered = df_orders_filtered[df_orders_filtered['city_name'] == city_name]
         df_orders_all_for_city = df_orders_filtered.copy()
@@ -1838,6 +2107,7 @@ def get_map_data():
         if end_date: df_orders_filtered = df_orders_filtered[df_orders_filtered['created_at'] <= end_date]
         if selected_business_lines: df_orders_filtered = df_orders_filtered[df_orders_filtered['business_line'].isin(selected_business_lines)]
         
+        # --- IMPROVED Heatmap generation using new functions ---
         if heatmap_type_req in ["order_density", "order_density_organic", "order_density_non_organic", "user_density"]:
             print(f"Generating improved heatmap for type: {heatmap_type_req} at zoom level: {zoom_level}")
             
@@ -1845,8 +2115,10 @@ def get_map_data():
                 heatmap_data_result = generate_improved_heatmap_data(heatmap_type_req, df_orders_filtered, zoom_level)
                 
                 if heatmap_data_result:
+                    # Add metadata for frontend optimization
                     print(f"Generated {len(heatmap_data_result)} heatmap points")
                     
+                    # Calculate some statistics for the frontend
                     values = [point['value'] for point in heatmap_data_result if 'value' in point and point['value'] is not None]
                     if values:
                         heatmap_stats = {
@@ -1867,6 +2139,7 @@ def get_map_data():
                     
             except Exception as e:
                 print(f"Error generating improved heatmap: {e}")
+                # Fallback to basic method if improved method fails
                 heatmap_data = generate_basic_heatmap_fallback(heatmap_type_req, df_orders_filtered)
         
         elif heatmap_type_req == "population" and city_name == "tehran":
@@ -1886,8 +2159,9 @@ def get_map_data():
                     if actual_name_col: 
                         gdf_pop_source = gdf_pop_source[gdf_pop_source[actual_name_col].isin(selected_polygon_sub_types)]
                 
+                # Adjust point density based on zoom level for population heatmap
                 base_divisor = 1000
-                zoom_multiplier = max(0.1, min(2.0, (zoom_level / 11.0)))
+                zoom_multiplier = max(0.1, min(2.0, (zoom_level / 11.0)))  # Scale with zoom
                 point_density_divisor = base_divisor / zoom_multiplier
                 
                 temp_points = []
@@ -1903,6 +2177,7 @@ def get_map_data():
                 heatmap_data = temp_points
                 print(f"Generated {len(heatmap_data)} points for population heatmap at zoom {zoom_level}")
         
+        # --- Coverage Grid Generation ---
         if area_type_display == "coverage_grid":
             print(f"DEBUG: Generating coverage grid for {city_name}")
             
@@ -1912,7 +2187,7 @@ def get_map_data():
                 'vendor_codes': vendor_codes_for_cache,
                 'radius_modifier': radius_modifier, 'radius_mode': radius_mode, 'radius_fixed': radius_fixed,
                 'business_lines': sorted(selected_business_lines),
-                'vendor_map_type': vendor_map_type
+                'vendor_map_type': vendor_map_type  # NEW: Include vendor map type in cache
             }, sort_keys=True).encode()).hexdigest()
             
             if cache_key in coverage_cache:
@@ -1923,6 +2198,7 @@ def get_map_data():
                 point_area_info = find_marketing_area_for_points(grid_points, city_name)
                 coverage_results = calculate_coverage_for_grid_vectorized(grid_points, df_v_filtered, city_name)
                 
+                # NEW: Support for both Tehran and Mashhad target-based logic
                 use_target_based_logic = bool(
                     city_name in ["tehran", "mashhad"] and
                     len(selected_business_lines) == 1 and
@@ -1963,6 +2239,7 @@ def get_map_data():
                 coverage_cache[cache_key] = coverage_grid_data
                 print(f"Filtered to {len(coverage_grid_data)} coverage points with vendors")
         
+        # --- Centralized Polygon Display & Enrichment Logic ---
         final_polygons_gdf = None
         if area_type_display != "none" and area_type_display != "coverage_grid":
             gdf_to_enrich, name_col_to_use = None, None
@@ -1989,11 +2266,13 @@ def get_map_data():
                     if actual_name_col: final_polygons_gdf = final_polygons_gdf[final_polygons_gdf[actual_name_col].astype(str).isin(selected_polygon_sub_types)]
                 if not final_polygons_gdf.empty:
                     clean_gdf = final_polygons_gdf.copy()
+                    # FIX: Properly clean all columns
                     for col in clean_gdf.columns:
                         if col == 'geometry': continue
                         clean_gdf[col] = clean_gdf[col].astype(object).where(pd.notna(clean_gdf[col]), None)
                     polygons_geojson = clean_gdf.__geo_interface__
         
+        # Marketing areas overlay for coverage grid
         if area_type_display == "coverage_grid" and city_name in gdf_marketing_areas:
             gdf_to_send = gdf_marketing_areas[city_name].copy()
             if selected_polygon_sub_types and 'name' in gdf_to_send.columns:
@@ -2014,10 +2293,13 @@ def get_map_data():
             "polygons": polygons_geojson, 
             "coverage_grid": coverage_grid_data,
             "processing_time": request_time,
+            # NEW: Add metadata for frontend optimization
             "zoom_level": zoom_level,
             "heatmap_type": heatmap_type_req,
+            # NEW: Multi-platform metadata
             "vendor_map_type": vendor_map_type,
             "vendor_sources": list(set([v.get('vendor_source') for v in vendor_markers if v.get('vendor_source')])) if vendor_markers else [],
+            # NEW: Add refresh metadata
             "data_freshness": {
                 "vendor_last_refresh": refresh_stats['vendor_last_refresh'].isoformat() if refresh_stats['vendor_last_refresh'] else None,
                 "order_last_refresh": refresh_stats['order_last_refresh'].isoformat() if refresh_stats['order_last_refresh'] else None,
@@ -2026,6 +2308,7 @@ def get_map_data():
             }
         }
         
+        # FIX: Clean all data to ensure no NaN values in JSON
         response_data = clean_data_for_json(response_data)
         
         try:
@@ -2039,10 +2322,13 @@ def get_map_data():
         print(f"Error in /api/map-data: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
     
+# --- Function to Open Browser ---
 def open_browser():
+    """Opens the web browser to the app's URL after a short delay."""
     time.sleep(1)
     webbrowser.open_new("http://127.0.0.1:5001/")
 
+# --- Main Execution ---
 if __name__ == '__main__':
     load_data()
     if os.environ.get("WERKZEUG_RUN_MAIN") != "true":

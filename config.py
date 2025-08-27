@@ -10,7 +10,7 @@ os.environ.setdefault('MALLOC_MMAP_MAX_', '65536')
 # Metabase connection details
 METABASE_URL = os.getenv("METABASE_URL", "https://metabase.ofood.cloud")
 METABASE_USERNAME = os.getenv("METABASE_USERNAME", "xmap@ofood.cloud")
-METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "MrpD7vlTk468")
+METABASE_PASSWORD = os.getenv("METABASE_PASSWORD", "METABASE_PASSWORD")
 
 # Metabase question IDs
 ORDER_DATA_QUESTION_ID = int(os.getenv("ORDER_DATA_QUESTION_ID", "5822"))

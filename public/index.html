@@ -12,6 +12,7 @@
         <header class="header">
             <h1>TAPSI FOOD MAP DASHBOARD</h1>
             <p>BY BUSINESS GROWTH TEAM</p>
+            <!-- Simplified auto-refresh status indicator -->
             <div class="refresh-status" id="refresh-status">
                 <span class="refresh-indicator" id="refresh-indicator">●</span>
                 <span class="refresh-text" id="refresh-text">Auto-refresh active</span>
@@ -29,6 +30,7 @@
             <div class="filter-item">
                 <label for="city">City:</label>
                 <select id="city">
+                    <!-- Options populated by JS -->
                 </select>
             </div>
              <div class="filter-item">
@@ -64,6 +66,7 @@
                 <textarea id="vendor-codes-filter" rows="3" placeholder="e.g. 2wnok5, 271kr2
 or one per line"></textarea>
             </div>
+            <!-- Enhanced location finder and refresh controls -->
             <div class="filter-item-group">
                 <div class="filter-item">
                     <label for="lat-finder-input">Find Latitude:</label>
@@ -75,6 +78,7 @@ or one per line"></textarea>
                 </div>
                 <button id="btn-find-location" class="btn-secondary">Show on Map</button>
                 
+                <!-- NEW: Auto-refresh timers and manual controls -->
                 <div class="refresh-controls">
                     <div class="refresh-timer-group">
                         <div class="refresh-timer">
@@ -108,16 +112,19 @@ or one per line"></textarea>
                 <div id="map-loading-overlay-wrapper" class="visible">LOADING ...</div>
             </div>
             <aside class="sidebar-filters">
+                <!-- NEW: Multi-Platform Vendor Map Type Filter -->
                 <h4>🏪 Multi-Platform Vendor Controls</h4>
                 <div class="filter-item">
                     <label for="vendor-map-type">Vendor Map Type:</label>
                     <select id="vendor-map-type">
+                        <!-- Options populated by JS -->
                     </select>
                     <small style="display: block; margin-top: 4px; color: var(--text-muted);">
                         Choose which vendor platform(s) to display on the map
                     </small>
                 </div>
                 
+                <!-- NEW: Platform-specific filters with conditional visibility -->
                 <div class="filter-item" id="is-express-filter-container" style="display: none;">
                     <label for="is-express">Express (Snappfood):</label>
                     <select id="is-express">
@@ -142,6 +149,7 @@ or one per line"></textarea>
                     </small>
                 </div>
                 
+                <!-- NEW: Enhanced delivery type filters (platform-specific) -->
                 <div class="filter-item" id="delivery-filters-container">
                     <label>Delivery Types (Tapsifood):</label>
                     <div class="delivery-type-controls">
@@ -168,10 +176,11 @@ or one per line"></textarea>
                 </div>
                 
                 <div class="filter-item" id="availability-filter-container">
-                    <label for="availability-min">Availability ≥:</label>
-                    <input type="number" id="availability-min" min="0" max="1" step="0.01" placeholder="e.g. 0.95">
+                    <label for="availability-filter" class="delivery-label">Availability >= :</label>
+                    <input type="number" id="availability-filter" class="availability-input" 
+                           step="0.01" min="0" max="1" placeholder="e.g. 0.95" value="">
                     <small style="display: block; margin-top: 4px; color: var(--text-muted);">
-                        Filter vendors by minimum availability (applies to Tapsifood vendors with availability data)
+                        Filter vendors by minimum availability ratio (applies to selected vendor map types)
                     </small>
                 </div>
                 
@@ -231,6 +240,7 @@ or one per line"></textarea>
                     <label for="vendor-radius-toggle">Vendor Radius:</label>
                     <button id="vendor-radius-toggle" class="btn-toggle">Hide Radius</button>
                 </div>
+                <!-- NEW: ENHANCED RADIUS MODIFIER CONTROLS WITH GRADE-BASED OPTION -->
                 <div class="filter-item">
                     <label for="radius-mode-selector">Radius Mode:</label>
                     <select id="radius-mode-selector">
@@ -373,6 +383,7 @@ or one per line"></textarea>
     <button id="apply-filters-btn" class="btn-primary btn-apply-fixed">Apply All Filters</button>
     
     <script>
+        // Enhanced Auto-Refresh Timer System
         class AutoRefreshTimerManager {
             constructor() {
                 this.vendorTimerEl = document.getElementById('vendor-timer');
@@ -384,8 +395,8 @@ or one per line"></textarea>
                 
                 this.vendorNextRefresh = null;
                 this.orderNextRefresh = null;
-                this.vendorInterval = 2;
-                this.orderInterval = 300;
+                this.vendorInterval = 2; // minutes
+                this.orderInterval = 300; // minutes (5 hours)
                 
                 this.timerInterval = null;
                 this.statusInterval = null;
@@ -424,15 +435,18 @@ or one per line"></textarea>
             updateFromStatus(status) {
                 if (!status) return;
                 
+                // Update intervals from server
                 this.vendorInterval = status.vendor_refresh.interval_minutes || 2;
                 this.orderInterval = status.order_refresh.interval_minutes || 300;
                 
+                // Calculate next refresh times
                 const now = new Date();
                 
                 if (status.vendor_refresh.last_refresh) {
                     const lastVendorRefresh = new Date(status.vendor_refresh.last_refresh);
                     this.vendorNextRefresh = new Date(lastVendorRefresh.getTime() + (this.vendorInterval * 60 * 1000));
                 } else {
+                    // If no last refresh, assume next refresh is interval from now
                     this.vendorNextRefresh = new Date(now.getTime() + (this.vendorInterval * 60 * 1000));
                 }
                 
@@ -443,6 +457,7 @@ or one per line"></textarea>
                     this.orderNextRefresh = new Date(now.getTime() + (this.orderInterval * 60 * 1000));
                 }
                 
+                // Update main status indicator
                 this.updateMainStatus(status);
             }
             
@@ -460,20 +475,24 @@ or one per line"></textarea>
             }
             
             startTimers() {
+                // Update timers every second
                 this.timerInterval = setInterval(() => {
                     this.updateTimerDisplays();
                 }, 1000);
                 
+                // Check status every 30 seconds
                 this.statusInterval = setInterval(() => {
                     this.fetchInitialStatus();
                 }, 30000);
                 
+                // Initial update
                 this.updateTimerDisplays();
             }
             
             updateTimerDisplays() {
                 const now = new Date();
                 
+                // Update vendor timer
                 if (this.vendorNextRefresh) {
                     const vendorTimeLeft = this.vendorNextRefresh - now;
                     if (vendorTimeLeft > 0) {
@@ -482,6 +501,7 @@ or one per line"></textarea>
                     } else {
                         this.vendorTimerEl.textContent = 'Now';
                         this.vendorTimerEl.className = 'timer-value refreshing';
+                        // Reset for next cycle
                         this.vendorNextRefresh = new Date(now.getTime() + (this.vendorInterval * 60 * 1000));
                     }
                 } else {
@@ -489,6 +509,7 @@ or one per line"></textarea>
                     this.vendorTimerEl.className = 'timer-value';
                 }
                 
+                // Update order timer
                 if (this.orderNextRefresh) {
                     const orderTimeLeft = this.orderNextRefresh - now;
                     if (orderTimeLeft > 0) {
@@ -497,6 +518,7 @@ or one per line"></textarea>
                     } else {
                         this.orderTimerEl.textContent = 'Now';
                         this.orderTimerEl.className = 'timer-value refreshing';
+                        // Reset for next cycle
                         this.orderNextRefresh = new Date(now.getTime() + (this.orderInterval * 60 * 1000));
                     }
                 } else {
@@ -524,6 +546,7 @@ or one per line"></textarea>
                 const originalContent = button.innerHTML;
                 
                 try {
+                    // Show loading state
                     button.innerHTML = '🔄';
                     button.classList.add('refreshing');
                     button.disabled = true;
@@ -543,6 +566,7 @@ or one per line"></textarea>
                     const result = await response.json();
                     console.log(`Manual ${type} refresh result:`, result);
                     
+                    // Update next refresh time immediately
                     const now = new Date();
                     if (type === 'vendor') {
                         this.vendorNextRefresh = new Date(now.getTime() + (this.vendorInterval * 60 * 1000));
@@ -550,6 +574,7 @@ or one per line"></textarea>
                         this.orderNextRefresh = new Date(now.getTime() + (this.orderInterval * 60 * 1000));
                     }
                     
+                    // Show success state briefly
                     button.innerHTML = '✅';
                     setTimeout(() => {
                         button.innerHTML = originalContent;
@@ -557,6 +582,7 @@ or one per line"></textarea>
                         button.disabled = false;
                     }, 1500);
                     
+                    // Fetch updated status
                     setTimeout(() => {
                         this.fetchInitialStatus();
                     }, 1000);
@@ -564,6 +590,7 @@ or one per line"></textarea>
                 } catch (error) {
                     console.error(`Manual ${type} refresh failed:`, error);
                     
+                    // Show error state
                     button.innerHTML = '❌';
                     setTimeout(() => {
                         button.innerHTML = originalContent;
@@ -583,11 +610,13 @@ or one per line"></textarea>
             }
         }
         
+        // Initialize timer manager when DOM is loaded
         let timerManager;
         document.addEventListener('DOMContentLoaded', () => {
             timerManager = new AutoRefreshTimerManager();
         });
         
+        // Cleanup on page unload
         window.addEventListener('beforeunload', () => {
             if (timerManager) {
                 timerManager.destroy();

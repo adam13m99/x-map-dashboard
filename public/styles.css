@@ -375,6 +375,7 @@ body.is-loading {
 .filter-item select, 
 .filter-item input[type="date"], 
 .filter-item input[type="text"],
+.filter-item input[type="number"],
 .filter-item input[type="color"],
 .custom-checkbox-dropdown .dropdown-button {
     padding: 0 0.75rem; 
@@ -396,6 +397,7 @@ body.is-loading {
 .filter-item select:focus, 
 .filter-item input[type="date"]:focus,
 .filter-item input[type="text"]:focus,
+.filter-item input[type="number"]:focus,
 .custom-checkbox-dropdown .dropdown-button:focus {
     border-color: var(--primary-color);
     outline: 0;
@@ -919,4 +921,17 @@ button:disabled,
 
 .filter-item.success label {
     color: var(--success-color);
+}
+
+/* Availability Filter Specific Styles */
+.availability-input {
+    width: 120px !important;
+    min-width: 120px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    text-align: center;
+}
+
+.availability-input::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
 }

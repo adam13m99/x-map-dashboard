@@ -261,7 +261,7 @@ if __name__ != "__main__":
     pass
 else:
     # When run directly, show full configuration details
-    print("🔧 MAP DASHBOARD CONFIGURATION (MULTI-PLATFORM + DEBUG MODE)")
+    print("MAP DASHBOARD CONFIGURATION (MULTI-PLATFORM + DEBUG MODE)")
     print("=" * 60)
     print_config_summary()
     print()
@@ -269,13 +269,13 @@ else:
     print()
     validate_config()
 
-print(f"🔧 Memory optimization applied: {MEMORY_OPTIMIZATION}")
-print(f"📊 Performance settings: Workers={WORKER_COUNT}, Cache={CACHE_SIZE}, PageSize={PAGE_SIZE}")
-print(f"🚀 Environment: {FLASK_ENV}, Debug={DEBUG}")
-print(f"⏱️  Timeouts: Request={REQUEST_TIMEOUT}s, Graceful={GRACEFUL_TIMEOUT}s")
-print(f"🏪 Multi-Platform: Tapsifood + Snappfood support enabled")
+print(f"Memory optimization applied: {MEMORY_OPTIMIZATION}")
+print(f"Performance settings: Workers={WORKER_COUNT}, Cache={CACHE_SIZE}, PageSize={PAGE_SIZE}")
+print(f"Environment: {FLASK_ENV}, Debug={DEBUG}")
+print(f"Timeouts: Request={REQUEST_TIMEOUT}s, Graceful={GRACEFUL_TIMEOUT}s")
+print(f"Multi-Platform: Tapsifood + Snappfood support enabled")
 if ENABLE_AUTO_REFRESH:
-    print(f"🔄 Auto-Refresh: Enabled (Vendors: {VENDOR_REFRESH_INTERVAL_MINUTES}min, Orders: {ORDER_REFRESH_INTERVAL_MINUTES}min)")
+    print(f"Auto-Refresh: Enabled (Vendors: {VENDOR_REFRESH_INTERVAL_MINUTES}min, Orders: {ORDER_REFRESH_INTERVAL_MINUTES}min)")
 
 # ENVIRONMENT VARIABLE OVERRIDES - NEW: Document available overrides
 """

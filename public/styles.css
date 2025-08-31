@@ -45,7 +45,8 @@ body {
 
 /* Loading State Styles */
 body.is-loading .dashboard-container > *:not(#map-loading-overlay-wrapper), /* Target direct children except wrapper */
-body.is-loading .btn-apply-fixed {
+body.is-loading .btn-apply-fixed,
+body.is-loading .btn-extract-fixed {
     filter: blur(5px);
     pointer-events: none;
     transition: filter 0.2s ease-in-out;
@@ -754,6 +755,32 @@ button, .button {
     min-width: 150px; 
 }
 
+/* Extract Button Styling - positioned next to Apply Button */
+.btn-extract-fixed {
+    position: fixed;
+    bottom: 20px;
+    right: 190px; /* Position to left of apply button */
+    z-index: 1001;
+    min-width: 180px;
+    background-color: var(--success-color);
+    border-color: var(--success-color);
+}
+
+.btn-extract-fixed:hover {
+    background-color: var(--success-hover-color);
+    border-color: var(--success-hover-color);
+}
+
+.btn-extract-fixed:disabled {
+    background-color: var(--secondary-color);
+    border-color: var(--secondary-color);
+    cursor: not-allowed;
+}
+
+.extract-icon {
+    margin-right: 0.5rem;
+}
+
 /* --- Enhanced Styles for Lat/Lng Finder with Refresh Controls --- */
 .filter-item-group {
     display: flex;
@@ -853,6 +880,15 @@ button:disabled,
     .refresh-status {
         justify-content: center;
         margin-top: 0.75rem;
+    }
+    
+    /* Responsive positioning for extract button */
+    .btn-extract-fixed {
+        position: relative;
+        right: auto;
+        bottom: auto;
+        width: 100%;
+        margin-bottom: 0.5rem;
     }
 }
 

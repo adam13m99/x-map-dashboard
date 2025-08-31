@@ -4,13 +4,14 @@ import re
 import threading 
 import webbrowser 
 import time 
-import random 
+import random
+import io 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely import wkt
 from shapely.geometry import Point, Polygon
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 from flask_cors import CORS
 import json
 import hashlib
@@ -229,6 +230,28 @@ def apply_grade_based_radius(df_vendors):
         avg_radius = stats['mean']
         print(f"   {grade}: {count} vendors → {avg_radius:.1f}km radius")
     
+    return df_copy
+
+def apply_grade_dynamic_radius(df_vendors, grade_radius_settings):
+    """
+    Apply dynamic grade-based radius using user-defined settings.
+    """
+    if df_vendors is None or df_vendors.empty or not grade_radius_settings:
+        return df_vendors
+        
+    df_copy = df_vendors.copy()
+    
+    if 'grade' not in df_copy.columns:
+        return df_copy
+    
+    # Apply user-defined radius mapping (similar to static grade-based)
+    def get_radius_for_grade(grade):
+        if pd.isna(grade) or grade is None:
+            return grade_radius_settings.get('Ungraded', 2.0)
+        grade_str = str(grade).strip()
+        return grade_radius_settings.get(grade_str, grade_radius_settings.get('Ungraded', 2.0))
+    
+    df_copy['radius'] = df_copy['grade'].apply(get_radius_for_grade)
     return df_copy
 
 # NEW: Multi-platform vendor processing functions
@@ -1677,6 +1700,13 @@ def get_initial_data():
         if not status_series.empty:
             vendor_statuses = sorted([int(x) for x in status_series.unique()])
     
+    vendor_status_values = []
+    if not df_vendors_unified.empty and 'vendor_status' in df_vendors_unified.columns:
+        # Filter out NaN values before converting to int
+        status_values_series = df_vendors_unified['vendor_status'].dropna()
+        if not status_values_series.empty:
+            vendor_status_values = sorted([int(x) for x in status_values_series.unique()])
+    
     vendor_grades = []
     if not df_vendors_unified.empty and 'grade' in df_vendors_unified.columns:
         vendor_grades = sorted(safe_tolist(df_vendors_unified['grade'].astype(str)))
@@ -1699,6 +1729,7 @@ def get_initial_data():
         "tehran_region_districts": tehran_region_districts,
         "tehran_main_districts": tehran_main_districts,
         "vendor_statuses": vendor_statuses,
+        "vendor_status_values": vendor_status_values,
         "vendor_grades": vendor_grades,
         # NEW: Multi-platform vendor options
         "vendor_map_type_options": vendor_map_type_options,
@@ -1931,6 +1962,7 @@ def get_map_data():
         vendor_codes_input_str = request.args.get('vendor_codes_filter', default="", type=str)
         selected_vendor_codes_for_vendors_only = [code.strip() for code in re.split(r'[\s,;\n]+', vendor_codes_input_str) if code.strip()]
         selected_vendor_status_ids = [int(s.strip()) for s in request.args.getlist('vendor_status_ids') if s.strip().isdigit()]
+        selected_vendor_status_filter = [int(s.strip()) for s in request.args.getlist('vendor_status_filter') if s.strip().isdigit()]
         selected_vendor_grades = [g.strip() for g in request.args.getlist('vendor_grades') if g.strip()]
         vendor_visible_str = request.args.get('vendor_visible', default="any", type=str)
         vendor_is_open_str = request.args.get('vendor_is_open', default="any", type=str)
@@ -1955,6 +1987,17 @@ def get_map_data():
         radius_modifier = request.args.get('radius_modifier', default=1.0, type=float)
         radius_mode = request.args.get('radius_mode', default='percentage', type=str)
         radius_fixed = request.args.get('radius_fixed', default=3.0, type=float)
+        
+        # NEW: Grade-based dynamic radius settings
+        grade_radius_params = request.args.getlist('grade_radius')
+        grade_radius_settings = {}
+        for param in grade_radius_params:
+            if ':' in param:
+                grade, radius_str = param.split(':', 1)
+                try:
+                    grade_radius_settings[grade] = float(radius_str)
+                except ValueError:
+                    print(f"Warning: Invalid radius value for grade {grade}: {radius_str}")
         
         # NEW: Check if vendor map type has changed and update unified dataset
         if vendor_map_type != current_vendor_map_type:
@@ -1996,6 +2039,10 @@ def get_map_data():
                     # NEW: Apply grade-based radius
                     print(f"DEBUG: Applying grade-based radius...")
                     df_v_filtered = apply_grade_based_radius(df_v_filtered)
+                elif radius_mode == 'grade-dynamic':
+                    # NEW: Apply grade-based dynamic radius
+                    print(f"DEBUG: Applying grade-based dynamic radius with {len(grade_radius_settings)} custom settings...")
+                    df_v_filtered = apply_grade_dynamic_radius(df_v_filtered, grade_radius_settings)
                 else:
                     # Handle NaN values in original_radius for percentage mode
                     df_v_filtered['radius'] = df_v_filtered['original_radius'].fillna(3.0) * radius_modifier
@@ -2005,6 +2052,8 @@ def get_map_data():
                     df_v_filtered['radius'] = radius_fixed
                 elif radius_mode == 'grade':
                     df_v_filtered = apply_grade_based_radius(df_v_filtered)
+                elif radius_mode == 'grade-dynamic':
+                    df_v_filtered = apply_grade_dynamic_radius(df_v_filtered, grade_radius_settings)
                 else:
                     df_v_filtered['radius'] = df_v_filtered['radius'].fillna(3.0) * radius_modifier
             
@@ -2081,6 +2130,9 @@ def get_map_data():
                 if selected_vendor_status_ids and 'status_id' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['status_id'].isin(selected_vendor_status_ids)]
                     print(f"DEBUG: Vendors after status filtering = {len(df_v_filtered)}")
+                if selected_vendor_status_filter and 'vendor_status' in df_v_filtered.columns:
+                    df_v_filtered = df_v_filtered[df_v_filtered['vendor_status'].isin(selected_vendor_status_filter)]
+                    print(f"DEBUG: Vendors after vendor_status filtering = {len(df_v_filtered)}")
                 if selected_vendor_grades and 'grade' in df_v_filtered.columns: 
                     df_v_filtered = df_v_filtered[df_v_filtered['grade'].isin(selected_vendor_grades)]
                     print(f"DEBUG: Vendors after grade filtering = {len(df_v_filtered)}")
@@ -2321,6 +2373,197 @@ def get_map_data():
         import traceback
         print(f"Error in /api/map-data: {e}\n{traceback.format_exc()}")
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
+@app.route('/api/extract-vendors', methods=['POST'])
+def extract_vendors():
+    """Extract visible vendors to Excel format with fallback to CSV"""
+    try:
+        data = request.get_json()
+        vendors = data.get('vendors', [])
+        filters = data.get('filters', {})
+        timestamp = data.get('timestamp', datetime.now().isoformat())
+        
+        logger.info(f"Extract vendors request: {len(vendors)} vendors received")
+        
+        if not vendors:
+            return jsonify({"error": "No vendor data provided"}), 400
+        
+        # Limit vendor count to prevent memory issues
+        if len(vendors) > 10000:
+            logger.warning(f"Too many vendors requested: {len(vendors)}, limiting to 10000")
+            vendors = vendors[:10000]
+        
+        # Convert to DataFrame for easier manipulation
+        df_vendors = pd.DataFrame(vendors)
+        logger.info(f"DataFrame created with {len(df_vendors)} rows and {len(df_vendors.columns)} columns")
+        
+        # Define columns to include (platform-agnostic fields first)
+        base_columns = [
+            'vendor_code', 'vendor_name', 'latitude', 'longitude', 
+            'city_name', 'business_line', 'grade', 'vendor_source',
+            'status_id', 'visible', 'open', 'radius', 'is_dual'
+        ]
+        
+        # Add platform-specific columns if they exist
+        platform_columns = []
+        if 'is_express' in df_vendors.columns:
+            platform_columns.append('is_express')
+        if 'own_delivery' in df_vendors.columns:
+            platform_columns.extend(['own_delivery', 'ofood_delivery'])
+        if 'availability' in df_vendors.columns:
+            platform_columns.append('availability')
+            
+        # Select only available columns
+        available_columns = [col for col in base_columns + platform_columns if col in df_vendors.columns]
+        df_export = df_vendors[available_columns].copy()
+        logger.info(f"Export dataframe prepared with columns: {list(df_export.columns)}")
+        
+        # Clean up the data for export
+        for col in df_export.columns:
+            if df_export[col].dtype == 'object':
+                df_export[col] = df_export[col].fillna('').astype(str)
+            elif df_export[col].dtype in ['float64', 'int64']:
+                df_export[col] = df_export[col].fillna('')
+        
+        # Try Excel first, fall back to CSV if there are issues
+        try:
+            # Check if openpyxl is available
+            import openpyxl
+            
+            # Create Excel content using BytesIO
+            output = io.BytesIO()
+            
+            # Create Excel writer with formatting
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Write main vendors data
+                df_export.to_excel(writer, sheet_name='Vendors', index=False)
+                
+                # Write filters information to a separate sheet
+                filters_data = []
+                for key, value in filters.items():
+                    if isinstance(value, list):
+                        value = ', '.join(map(str, value))
+                    filters_data.append([key, str(value)])
+                
+                if filters_data:
+                    df_filters = pd.DataFrame(filters_data, columns=['Filter', 'Value'])
+                    df_filters.to_excel(writer, sheet_name='Applied Filters', index=False)
+                
+                # Write summary information
+                summary_data = [
+                    ['Export Date', timestamp],
+                    ['Total Vendors', len(df_export)],
+                    ['City', filters.get('city', 'N/A')],
+                    ['Vendor Map Type', filters.get('vendorMapType', 'N/A')]
+                ]
+                df_summary = pd.DataFrame(summary_data, columns=['Metric', 'Value'])
+                df_summary.to_excel(writer, sheet_name='Summary', index=False)
+            
+            # Get the Excel data
+            file_content = output.getvalue()
+            output.close()
+            
+            # Generate filename with filters info
+            city = filters.get('city', 'all').replace(' ', '_')
+            vendor_type = filters.get('vendorMapType', 'unknown').replace(' ', '_')
+            date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"vendors_export_{city}_{vendor_type}_{date_str}.xlsx"
+            
+            logger.info(f"Excel export successful: {len(file_content)} bytes, filename: {filename}")
+            
+            # Return Excel file
+            response = Response(
+                file_content,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{filename}"',
+                    'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                }
+            )
+            
+            return response
+            
+        except Exception as excel_error:
+            logger.warning(f"Excel export failed, falling back to CSV: {excel_error}")
+            
+            # Fallback to CSV
+            import csv
+            output = io.StringIO()
+            
+            # Write CSV data
+            writer = csv.DictWriter(output, fieldnames=df_export.columns)
+            writer.writeheader()
+            
+            for _, row in df_export.iterrows():
+                row_dict = {}
+                for col in df_export.columns:
+                    value = row[col]
+                    if pd.isna(value):
+                        row_dict[col] = ''
+                    else:
+                        row_dict[col] = str(value)
+                writer.writerow(row_dict)
+            
+            # Get CSV content
+            csv_content = output.getvalue()
+            output.close()
+            
+            # Generate filename
+            city = filters.get('city', 'all').replace(' ', '_')
+            vendor_type = filters.get('vendorMapType', 'unknown').replace(' ', '_')
+            date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"vendors_export_{city}_{vendor_type}_{date_str}.csv"
+            
+            logger.info(f"CSV export successful: {len(csv_content)} chars, filename: {filename}")
+            
+            # Return CSV file
+            response = Response(
+                csv_content,
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{filename}"',
+                    'Content-Type': 'text/csv; charset=utf-8'
+                }
+            )
+            
+            return response
+        
+    except Exception as e:
+        logger.error(f"Vendor extract error: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Extract vendors error: {e}\n{error_trace}")
+        logger.error(f"Full traceback: {error_trace}")
+        return jsonify({
+            "error": "Failed to extract vendors",
+            "details": str(e),
+            "type": type(e).__name__
+        }), 500
+
+@app.route('/api/extract-vendors/info', methods=['GET'])
+def get_extract_info():
+    """Get information about extractable vendor fields"""
+    try:
+        # Use thread-safe access to current vendor data
+        with data_lock:
+            sample_vendor = None
+            if df_vendors_unified is not None and not df_vendors_unified.empty:
+                sample_vendor = df_vendors_unified.iloc[0].to_dict()
+        
+        available_fields = []
+        if sample_vendor:
+            available_fields = list(sample_vendor.keys())
+        
+        return jsonify({
+            "available_fields": available_fields,
+            "vendor_map_types": list(VENDOR_MAP_TYPES.keys()),
+            "supported_formats": ["xlsx", "csv"],
+            "max_vendors": 10000  # Reasonable limit
+        })
+        
+    except Exception as e:
+        logger.error(f"Extract info error: {e}")
+        return jsonify({"error": "Failed to get extract info"}), 500
     
 # --- Function to Open Browser ---
 def open_browser():

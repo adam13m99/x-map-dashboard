@@ -15,8 +15,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let initialFilterData = {};
     let lastHeatmapData = null;
     let currentRadiusModifier = 1.0;
-    let currentRadiusMode = 'percentage'; // Can be 'percentage', 'fixed', or 'grade'
+    let currentRadiusMode = 'percentage'; // Can be 'percentage', 'fixed', 'grade', or 'grade-dynamic'
     let currentRadiusFixed = 3.0;
+    let gradeRadiusSettings = {}; // Store custom radius for each grade
     let marketingAreasOnTop = false;
     
     // NEW: Multi-platform vendor management
@@ -55,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const areaFillColorEl = document.getElementById('area-fill-color');
     const areaFillNoneEl = document.getElementById('area-fill-none');
     const applyFiltersBtn = document.getElementById('apply-filters-btn');
+    const extractVendorsBtn = document.getElementById('extract-vendors-btn');
     
     // NEW: Multi-platform vendor elements
     const vendorMapTypeEl = document.getElementById('vendor-map-type');
@@ -79,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const radiusFixedControl = document.getElementById('radius-fixed-control');
     const vendorRadiusFixedEl = document.getElementById('vendor-radius-fixed');
     const radiusFixedValueEl = document.getElementById('radius-fixed-value');
+    const radiusGradeDynamicControl = document.getElementById('radius-grade-dynamic-control');
+    const gradeRadiusControlsContainer = document.getElementById('grade-radius-controls');
     
     // Grid visualization elements
     const gridBlurEl = document.getElementById('grid-blur');
@@ -142,6 +146,11 @@ document.addEventListener('DOMContentLoaded', () => {
             button: document.getElementById('vendor-grade-filter-button'),
             panel: document.getElementById('vendor-grade-filter-panel'),
             paramName: 'vendor_grades', defaultText: 'Select Grades', optionsData: []
+        },
+        vendorStatusText: {
+            button: document.getElementById('vendor-status-text-filter-button'),
+            panel: document.getElementById('vendor-status-text-filter-panel'),
+            paramName: 'vendor_status_filter', defaultText: 'Select Vendor Status', optionsData: []
         },
         vendorAreaSubType: {
             button: document.getElementById('vendor-area-sub-type-filter-button'),
@@ -752,6 +761,10 @@ document.addEventListener('DOMContentLoaded', () => {
         customFilterConfigs.vendorGrade.optionsData = (initialFilterData.vendor_grades || [])
             .map(g => ({ value: g, text: g, checked: false }));
         renderCustomDropdown(customFilterConfigs.vendorGrade);
+        
+        customFilterConfigs.vendorStatusText.optionsData = (initialFilterData.vendor_status_values || [])
+            .map(s => ({ value: String(s), text: `Status ${s}`, checked: false }));
+        renderCustomDropdown(customFilterConfigs.vendorStatusText);
         updateCityDependentCustomFilters(cityEl.value);
         updateVendorAreaSubTypeFilter();
     }
@@ -772,6 +785,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const restaurantOption = blConfig.optionsData.find(opt => opt.value && opt.value.toLowerCase() === "restaurant");
         if (restaurantOption) restaurantOption.checked = true;
         updateCustomDropdownButtonText(blConfig);
+        
+        // Set default vendor status to 1
+        const statusTextConfig = customFilterConfigs.vendorStatusText;
+        const status1Option = statusTextConfig.optionsData.find(opt => opt.value === "1");
+        if (status1Option) status1Option.checked = true;
+        updateCustomDropdownButtonText(statusTextConfig);
+        
         vendorVisibleEl.value = "1";
     }
     
@@ -978,17 +998,102 @@ document.addEventListener('DOMContentLoaded', () => {
         // Hide all controls first
         radiusPercentageControl.style.display = 'none';
         radiusFixedControl.style.display = 'none';
+        if (radiusGradeDynamicControl) radiusGradeDynamicControl.style.display = 'none';
         
         // Show appropriate control based on mode
         if (currentRadiusMode === 'fixed') {
             radiusFixedControl.style.display = 'block';
         } else if (currentRadiusMode === 'percentage') {
             radiusPercentageControl.style.display = 'block';
+        } else if (currentRadiusMode === 'grade-dynamic') {
+            if (radiusGradeDynamicControl) {
+                radiusGradeDynamicControl.style.display = 'block';
+                populateGradeDynamicControls();
+            }
         }
         // For 'grade' mode, we don't show either slider control
         
         // Update the modifier description
         updateRadiusModifierDescription();
+    }
+
+    // Function to populate grade-based dynamic controls
+    function populateGradeDynamicControls() {
+        if (!gradeRadiusControlsContainer || !initialFilterData || !initialFilterData.vendor_grades) return;
+        
+        gradeRadiusControlsContainer.innerHTML = '';
+        
+        // Define the exact grades as specified
+        const allGrades = ['A+', 'A', 'A-', 'B', 'B-', 'C', 'C-', 'D', 'D-', 'E', 'E-', 'F', 'Not Enough Rate', 'Ungraded'];
+        
+        // Default radius values for each grade
+        const defaultRadiusValues = {
+            'A+': 4.5, 'A': 4.0, 'A-': 4.0,
+            'B': 3.5, 'B-': 3.5,
+            'C': 3.0, 'C-': 3.0,
+            'D': 2.5, 'D-': 2.5,
+            'E': 2.0, 'E-': 2.0,
+            'F': 1.5, 'Not Enough Rate': 2.0, 'Ungraded': 2.0
+        };
+        
+        allGrades.forEach(grade => {
+            const gradeKey = String(grade);
+            const defaultRadius = defaultRadiusValues[gradeKey] || 3.0;
+            
+            // Initialize if not exists
+            if (!(gradeKey in gradeRadiusSettings)) {
+                gradeRadiusSettings[gradeKey] = defaultRadius;
+            }
+            
+            const controlDiv = document.createElement('div');
+            controlDiv.className = 'grade-radius-control';
+            controlDiv.style.cssText = `
+                display: flex;
+                align-items: center;
+                margin-bottom: 8px;
+                padding: 4px 8px;
+                background: var(--light-bg);
+                border-radius: 4px;
+            `;
+            
+            const label = document.createElement('label');
+            label.textContent = `${grade}: `;
+            label.style.cssText = `
+                min-width: 50px;
+                font-weight: 500;
+                margin-right: 8px;
+            `;
+            
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = '0.5';
+            slider.max = '8.0';
+            slider.step = '0.1';
+            slider.value = gradeRadiusSettings[gradeKey];
+            slider.style.cssText = `
+                flex: 1;
+                margin: 0 8px;
+            `;
+            
+            const valueSpan = document.createElement('span');
+            valueSpan.textContent = gradeRadiusSettings[gradeKey].toFixed(1) + ' km';
+            valueSpan.style.cssText = `
+                min-width: 45px;
+                font-size: 0.9em;
+                color: var(--text-muted);
+            `;
+            
+            slider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                gradeRadiusSettings[gradeKey] = value;
+                valueSpan.textContent = value.toFixed(1) + ' km';
+            });
+            
+            controlDiv.appendChild(label);
+            controlDiv.appendChild(slider);
+            controlDiv.appendChild(valueSpan);
+            gradeRadiusControlsContainer.appendChild(controlDiv);
+        });
     }
 
     // Helper function to update radius modifier description
@@ -1005,6 +1110,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setupEventListeners() {
         applyFiltersBtn.addEventListener('click', fetchAndDisplayMapData);
+        extractVendorsBtn.addEventListener('click', extractVisibleVendors);
         cityEl.addEventListener('change', (e) => {
             updateCityDependentCustomFilters(e.target.value);
             updateVendorAreaSubTypeFilter();
@@ -1135,12 +1241,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Enhanced reset button to handle grade mode
         btnResetRadius.addEventListener('click', () => {
-            if (currentRadiusMode === 'grade') {
-                // Switch back to percentage mode when resetting from grade mode
+            if (currentRadiusMode === 'grade' || currentRadiusMode === 'grade-dynamic') {
+                // Switch back to percentage mode when resetting from grade/grade-dynamic mode
                 radiusModeSelector.value = 'percentage';
                 currentRadiusMode = 'percentage';
                 updateRadiusModeUI();
             }
+            
+            // Reset grade dynamic settings
+            gradeRadiusSettings = {};
             
             vendorRadiusModifierEl.value = "100";
             radiusModifierValueEl.textContent = "100";
@@ -1307,6 +1416,8 @@ document.addEventListener('DOMContentLoaded', () => {
             .forEach(val => params.append(customFilterConfigs.vendorStatus.paramName, val));
         getSelectedValuesFromCustomDropdown(customFilterConfigs.vendorGrade)
             .forEach(val => params.append(customFilterConfigs.vendorGrade.paramName, val));
+        getSelectedValuesFromCustomDropdown(customFilterConfigs.vendorStatusText)
+            .forEach(val => params.append(customFilterConfigs.vendorStatusText.paramName, val));
 
         params.append('vendor_visible', vendorVisibleEl.value);
         params.append('vendor_is_open', vendorIsOpenEl.value);
@@ -1336,6 +1447,11 @@ document.addEventListener('DOMContentLoaded', () => {
             params.append('radius_fixed', currentRadiusFixed);
         } else if (currentRadiusMode === 'percentage') {
             params.append('radius_modifier', currentRadiusModifier);
+        } else if (currentRadiusMode === 'grade-dynamic') {
+            // Send all grade radius settings
+            Object.entries(gradeRadiusSettings).forEach(([grade, radius]) => {
+                params.append('grade_radius', `${grade}:${radius}`);
+            });
         }
         // For grade mode, we just pass the mode - backend will handle the grade-based logic
 
@@ -1831,6 +1947,90 @@ document.addEventListener('DOMContentLoaded', () => {
                 layer.bindPopup(popupContent);
             }
         }).addTo(polygonLayerGroup);
+    }
+
+    // Extract visible vendors functionality
+    async function extractVisibleVendors() {
+        if (!allVendorsData || allVendorsData.length === 0) {
+            alert('No vendors data available to extract.');
+            return;
+        }
+
+        // Show loading state
+        const originalText = extractVendorsBtn.innerHTML;
+        extractVendorsBtn.innerHTML = '<span class="extract-icon">⏳</span>Processing...';
+        extractVendorsBtn.disabled = true;
+
+        try {
+            const response = await fetch('/api/extract-vendors', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    vendors: allVendorsData,
+                    filters: getCurrentFilterState(),
+                    timestamp: new Date().toISOString()
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            // Get the filename from response headers
+            const contentDisposition = response.headers.get('content-disposition');
+            const filename = contentDisposition 
+                ? contentDisposition.split('filename=')[1].replace(/"/g, '')
+                : `vendors_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+            // Create download
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+
+            // Show success
+            extractVendorsBtn.innerHTML = '<span class="extract-icon">✅</span>Downloaded!';
+            setTimeout(() => {
+                extractVendorsBtn.innerHTML = originalText;
+                extractVendorsBtn.disabled = false;
+            }, 2000);
+
+        } catch (error) {
+            console.error('Extract vendors failed:', error);
+            alert(`Failed to extract vendors: ${error.message}`);
+            
+            extractVendorsBtn.innerHTML = originalText;
+            extractVendorsBtn.disabled = false;
+        }
+    }
+
+    function getCurrentFilterState() {
+        return {
+            city: cityEl.value,
+            dateStart: daterangeStartEl.value,
+            dateEnd: daterangeEndEl.value,
+            businessLines: getSelectedValuesFromCustomDropdown(customFilterConfigs.businessLine),
+            vendorMapType: currentVendorMapType,
+            vendorStatuses: getSelectedValuesFromCustomDropdown(customFilterConfigs.vendorStatus),
+            vendorGrades: getSelectedValuesFromCustomDropdown(customFilterConfigs.vendorGrade),
+            vendorStatusText: getSelectedValuesFromCustomDropdown(customFilterConfigs.vendorStatusText),
+            radiusMode: currentRadiusMode,
+            radiusModifier: currentRadiusModifier,
+            vendorVisible: vendorVisibleEl.value,
+            vendorIsOpen: vendorIsOpenEl.value,
+            isExpress: isExpressFilterEl.value,
+            isDual: isDualFilterEl.value,
+            ownDelivery: isOwnDeliveryEl.value,
+            ofoodDelivery: isOfoodDeliveryEl.value,
+            availability: availabilityFilterEl.value
+        };
     }
 
     // Initialize the application

@@ -218,6 +218,13 @@ or one per line"></textarea>
                         <div class="dropdown-panel" id="vendor-status-filter-panel"></div>
                     </div>
                 </div>
+                <div class="filter-item filter-item-custom-dropdown">
+                    <label for="vendor-status-text-filter-button">Vendor Status:</label>
+                    <div id="vendor-status-text-filter-container" class="custom-checkbox-dropdown">
+                        <button type="button" class="dropdown-button" id="vendor-status-text-filter-button">Select Vendor Status</button>
+                        <div class="dropdown-panel" id="vendor-status-text-filter-panel"></div>
+                    </div>
+                </div>
                 <div class="filter-item">
                     <label for="vendor-visible">Vendor Visible:</label>
                     <select id="vendor-visible">
@@ -247,6 +254,7 @@ or one per line"></textarea>
                         <option value="percentage">Percentage</option>
                         <option value="fixed">Fixed Value</option>
                         <option value="grade">Grade-based</option>
+                        <option value="grade-dynamic">Grade-based (Dynamic)</option>
                     </select>
                     <small style="display: block; margin-top: 2px; color: var(--text-muted);">
                         Grade-based: A+ &gt;4km, A/A- =4km, B/B- =3.5km, C/C- =3km, D/D- =2km, E/E- =1.5km, F =1km
@@ -265,6 +273,13 @@ or one per line"></textarea>
                     <small style="display: block; margin-top: 2px; color: var(--text-muted);">
                         Sets the same radius for all vendors regardless of grade
                     </small>
+                </div>
+                <div class="filter-item" id="radius-grade-dynamic-control" style="display: none;">
+                    <h5 style="margin: 0 0 10px 0; color: var(--primary-color);">Grade-based Radius Settings</h5>
+                    <div id="grade-radius-controls">
+                        <!-- Dynamic grade controls will be populated by JavaScript -->
+                    </div>
+                    <small style="display: block; margin-top: 4px; color: var(--text-muted);">Set custom radius for each vendor grade individually</small>
                 </div>
                 <div class="filter-item">
                     <button id="btn-reset-radius" class="btn-secondary" style="width: 100%;">Reset Radius</button>
@@ -381,6 +396,10 @@ or one per line"></textarea>
         </footer>
     </div>
     <button id="apply-filters-btn" class="btn-primary btn-apply-fixed">Apply All Filters</button>
+    <button id="extract-vendors-btn" class="btn-secondary btn-extract-fixed">
+        <span class="extract-icon">📋</span>
+        Extract Visible Vendors
+    </button>
     
     <script>
         // Enhanced Auto-Refresh Timer System
